@@ -438,7 +438,16 @@ def _url_payload_command(n: int) -> str:
 #: Raised again, from 32,060, by 37 lines for ``exfil_url_rules._heavy_percent_encoding``
 #: and its manifest entry: words percent-encoded in a URL path (a Chinese headline) do not trip the heavy
 #: percent-encoding rule. It is new rule logic, not glue; nothing else moved.
-_PACKAGE_LINE_BUDGET = 32_097
+#:
+#: Raised again, from 32,097, for ``redaction._SRI_INTEGRITY_RE``: pass 3 skips a run
+#: that is the whole digest of a Subresource Integrity value (``sha256-<43>=``,
+#: ``sha384-<64>``, ``sha512-<86>==``), because a digest is random base64 and a window
+#: inside it clears every gate. The shape is closed: the lowercase algorithm name after
+#: a non-run character, exactly that algorithm's digest length, exactly its padding,
+#: and nothing glued after. One regex of three fixed-width alternatives, a helper that
+#: returns the digest spans, their comment, and the one clause beside the document-link
+#: exemption. No pass widened, no threshold moved, and the exfil URL scan is unchanged.
+_PACKAGE_LINE_BUDGET = 32_154
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
