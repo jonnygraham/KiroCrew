@@ -103,7 +103,10 @@ APPROVAL_INTERACTIVE = "interactive"
 #: human's own answer (or no answer worth explaining) and a ``DENY_CAUSE_*``
 #: name from ``kiro_crew.constants`` when the denial was the host's doing.
 #: Today that is :data:`DENY_CAUSE_APPROVAL_TIMEOUT`, recorded by every shipped
-#: decider when its prompt expires unanswered. The driver reads it after a
+#: decider when its prompt expires unanswered, or
+#: :data:`DENY_CAUSE_APPROVAL_UNDELIVERABLE`, recorded when the prompt never
+#: reached the channel (text-reply, Discord, Telegram and Teams deciders). The
+#: driver steers both, each with its own reason. The driver reads it after a
 #: denial and steers the cause into the running turn BEFORE it rejects, so the
 #: model is not left with kiro-cli's generic "User denied tool execution" for a
 #: call nobody answered. A plain callable without the attribute is a denial
@@ -1394,12 +1397,13 @@ class TurnDriver:
         security control), and the cancellation re-raises.
         """
         cause = getattr(self.decider, "last_deny_cause", "") if self.decider is not None else ""
-        if cause == DENY_CAUSE_APPROVAL_TIMEOUT:
-            reason = "the tool-approval prompt went unanswered until its window closed"
-        elif cause == DENY_CAUSE_APPROVAL_UNDELIVERABLE:
-            reason = "the tool-approval prompt could not be delivered to the channel"
-        else:
+        if cause not in (DENY_CAUSE_APPROVAL_TIMEOUT, DENY_CAUSE_APPROVAL_UNDELIVERABLE):
             return
+        reason = (
+            "the tool-approval prompt went unanswered until its window closed"
+            if cause == DENY_CAUSE_APPROVAL_TIMEOUT
+            else "the tool-approval prompt could not be delivered to the channel"
+        )
         await self._steer_host_deny(
             event,
             reason,

@@ -263,3 +263,69 @@ class TestButtonDeciders:
         decider._futures["r-click"].set_result(False)
         assert await task is False
         assert decider.last_deny_cause == ""
+
+    @pytest.mark.asyncio
+    async def test_discord_undelivered_prompt_sets_undeliverable_cause(self):
+        """A prompt the channel refused is denied with the undeliverable cause,
+        whether the refusal lands before or during the wait, and a press on a
+        later prompt that reuses the key records no cause."""
+        from kiro_crew.discord import renderer as discord_renderer
+
+        cls = discord_renderer.DiscordApprovalDecider
+        decider = cls(session_key="discord:1")
+        key = cls.key("discord:1", "r-und")
+        cls.register_nonce(key)
+        cls.refuse_undelivered(key)
+        assert await decider(_event("r-und")) is False
+        assert decider.last_deny_cause == DENY_CAUSE_APPROVAL_UNDELIVERABLE
+        assert key not in cls._UNDELIVERED
+        # Refusal recorded while the wait is already running.
+        cls.register_nonce(key)
+        task = asyncio.create_task(decider(_event("r-und")))
+        await asyncio.sleep(0)
+        cls.refuse_undelivered(key)
+        assert await task is False
+        assert decider.last_deny_cause == DENY_CAUSE_APPROVAL_UNDELIVERABLE
+        # Same key, real Deny press: no cause.
+        nonce = cls.register_nonce(key)
+        task = asyncio.create_task(decider(_event("r-und")))
+        await asyncio.sleep(0)
+        assert cls.resolve_global(key, False, nonce=nonce) is True
+        assert await task is False
+        assert decider.last_deny_cause == ""
+        # A stale mark from an unadopted refusal does not survive a re-arm.
+        cls.register_nonce(key)
+        cls.refuse_undelivered(key)
+        cls.register_nonce(key)
+        assert key not in cls._UNDELIVERED
+        cls.retire(key)
+
+    @pytest.mark.asyncio
+    async def test_telegram_undelivered_prompt_sets_undeliverable_cause(self):
+        from kiro_crew.telegram import renderer as telegram_renderer
+
+        cls = telegram_renderer.TelegramApprovalDecider
+        decider = cls(session_key="telegram:1")
+        key = cls.key("telegram:1", "r-und")
+        cls.arm(key, "n1")
+        cls.refuse_undelivered(key)
+        assert await decider(_event("r-und")) is False
+        assert decider.last_deny_cause == DENY_CAUSE_APPROVAL_UNDELIVERABLE
+        assert key not in cls._UNDELIVERED
+        cls.arm(key, "n2")
+        task = asyncio.create_task(decider(_event("r-und")))
+        await asyncio.sleep(0)
+        cls.refuse_undelivered(key)
+        assert await task is False
+        assert decider.last_deny_cause == DENY_CAUSE_APPROVAL_UNDELIVERABLE
+        cls.arm(key, "n3")
+        task = asyncio.create_task(decider(_event("r-und")))
+        await asyncio.sleep(0)
+        assert cls.resolve_global(key, False, nonce="n3") is True
+        assert await task is False
+        assert decider.last_deny_cause == ""
+        # An unadopted refusal swept at turn end leaves no mark behind.
+        cls.arm(key, "n4")
+        cls.refuse_undelivered(key)
+        cls.discard_session("telegram:1")
+        assert key not in cls._UNDELIVERED
