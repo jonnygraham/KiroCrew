@@ -47,6 +47,7 @@ from kiro_crew.acp.types import (
 from kiro_crew.constants import (
     _STEERING_TAIL_PREFIX_RE,
     DENY_CAUSE_APPROVAL_TIMEOUT,
+    DENY_CAUSE_APPROVAL_UNDELIVERABLE,
     DENY_CAUSE_POLICY,
     DENY_CAUSE_SURFACE_POLICY,
     STEER_NOTICE_BOUND_SECS,
@@ -1375,10 +1376,11 @@ class TurnDriver:
         """Explain a host-caused denial to the model before the reject goes out.
 
         Reads the decider's ``last_deny_cause`` (see :data:`ApprovalDecider`).
-        Only :data:`DENY_CAUSE_APPROVAL_TIMEOUT` is steered: a human's Deny is a
-        real decision the generic tool result already describes correctly, and
-        deny-by-default with no decider is a configuration the model cannot act
-        on. Best-effort and bounded through
+        Steers :data:`DENY_CAUSE_APPROVAL_TIMEOUT` (prompt expired) and
+        :data:`DENY_CAUSE_APPROVAL_UNDELIVERABLE` (prompt not delivered): a
+        human's Deny is a real decision the generic tool result already describes
+        correctly, and deny-by-default with no decider is a configuration the
+        model cannot act on. Best-effort and bounded through
         :func:`kiro_crew.deny_notice.steer_refusal_notice`; a failure there
         never blocks the reject that follows.
 
@@ -1392,11 +1394,15 @@ class TurnDriver:
         security control), and the cancellation re-raises.
         """
         cause = getattr(self.decider, "last_deny_cause", "") if self.decider is not None else ""
-        if cause != DENY_CAUSE_APPROVAL_TIMEOUT:
+        if cause == DENY_CAUSE_APPROVAL_TIMEOUT:
+            reason = "the tool-approval prompt went unanswered until its window closed"
+        elif cause == DENY_CAUSE_APPROVAL_UNDELIVERABLE:
+            reason = "the tool-approval prompt could not be delivered to the channel"
+        else:
             return
         await self._steer_host_deny(
             event,
-            "the tool-approval prompt went unanswered until its window closed",
+            reason,
             cause=cause,
             # The caller audits this outcome after the wire is answered; a
             # cancellation here would skip that row, so the orphan reject
