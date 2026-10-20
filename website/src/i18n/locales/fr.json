@@ -13120,6 +13120,8 @@
       "kind_ruling": "décision attendue",
       "kind_stale": "inactif",
       "kind_orphaned": "orphelin",
+      "report_undelivered": "n’a pas pu envoyer son rapport",
+      "brief_undelivered": "n’a pas pu lire sa consigne",
       "no_report": "aucun rapport",
       "role_worker": "worker",
       "role_conductor": "conducteur",
