@@ -438,7 +438,15 @@ def _url_payload_command(n: int) -> str:
 #: Raised again, from 32,060, by 37 lines for ``exfil_url_rules._heavy_percent_encoding``
 #: and its manifest entry: words percent-encoded in a URL path (a Chinese headline) do not trip the heavy
 #: percent-encoding rule. It is new rule logic, not glue; nothing else moved.
-_PACKAGE_LINE_BUDGET = 32_097
+#:
+#: Raised again, from 32,097, for the host-set snapshot on
+#: ``exfil.redact_exfiltration_urls_with_records`` and its two-tuple wrapper: one
+#: optional ``exempt_hosts`` keyword that REPLACES the live platform read and the
+#: scoped override when a caller supplies the set it keyed a cache on, so the display
+#: cache stores output computed under exactly the set its key names. Fourteen lines:
+#: the keyword on both signatures, a two-branch read and the docstrings saying why.
+#: No rule widened or narrowed; the default path is the live read.
+_PACKAGE_LINE_BUDGET = 32_111
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
