@@ -63,6 +63,8 @@ KIND_CREWMATE_CAPABILITIES = "crewmate.capabilities"
 KIND_CREWMATE_GOAL = "crewmate.goal"
 KIND_CREWMATE_KEY_RESULTS = "crewmate.key_results"
 KIND_CREWMATE_CHECK_INS = "crewmate.check_ins"
+#: A crewmate's one offer to write its own Dashboard page (``change_card_dashboard_page``).
+KIND_CREWMATE_DASHBOARD_PAGE = "crewmate.dashboard_page"
 KIND_TEMPLATE_UPDATE = "template.update"
 KIND_MCP_INSTALL = "mcp.install"
 KIND_MCP_ADD_CUSTOM = "mcp.add_custom"
@@ -81,6 +83,9 @@ KIND_CREWMATE_IMPORT = "crewmate.import"
 #: its identity-checked Undo (delete that crewmate) and its state reads.
 CREWMATE_CREATING_KINDS = (KIND_CREWMATE_CREATE, KIND_CREWMATE_IMPORT)
 APP_ONLY_KINDS = frozenset({KIND_CREWMATE_IMPORT})
+#: Kinds only a crewmate raises about itself (``member_self.SELF_PROPOSALS``), never
+#: through ``propose_change``: :func:`list_kinds` leaves them out.
+SELF_ONLY_KINDS = frozenset({KIND_CREWMATE_DASHBOARD_PAGE})
 #: The ``.crewmate`` ``formatVersion`` values this version reads. Any added
 #: field bumps the version, so a newer file is refused rather than guessed at.
 CREWMATE_FORMAT_VERSIONS = (1,)
@@ -504,6 +509,13 @@ KINDS: dict[str, KindDef] = {
             ),
         ),
         KindDef(
+            KIND_CREWMATE_DASHBOARD_PAGE,
+            "One crewmate offers, once, to write its own Dashboard page around its goal "
+            "(the crewmate's own offer_dashboard_page).",
+            _obj({"member": _STR}, ["member"]),
+            (),
+        ),
+        KindDef(
             KIND_TEMPLATE_UPDATE,
             "Change an agent template's tools, allowedTools, skills or model. Affects "
             "every member built from it. A list field is replaced whole; to empty one, "
@@ -630,7 +642,7 @@ def list_kinds() -> list[dict[str, Any]]:
             "editable": list(k.editable),
         }
         for k in KINDS.values()
-        if k.id not in APP_ONLY_KINDS
+        if k.id not in APP_ONLY_KINDS and k.id not in SELF_ONLY_KINDS
     ]
 
 
@@ -1009,6 +1021,9 @@ def validate_params(kind: str, params: Any) -> dict[str, Any]:
         if len(out_ci) == 1:
             raise _fail("invalid_param", "give at least one check-in or its timing")
         return out_ci
+    if kind == KIND_CREWMATE_DASHBOARD_PAGE:
+        _only(p, {"member"})
+        return {"member": _member_name(p, "member")}
     if kind == KIND_TEMPLATE_UPDATE:
         _only(p, {"template", "fields", "clear"})
         template = _clean_str(p, "template", pattern=_TEMPLATE_NAME_RE)
@@ -1832,6 +1847,10 @@ def build_preview(
                 },
             )
         ]
+    elif kind == KIND_CREWMATE_DASHBOARD_PAGE:
+        from kiro_crew import change_card_dashboard_page
+
+        change_card_dashboard_page.preview(p, snapshot, context, out, fail=_fail, step=step)
     elif kind == KIND_CREWMATE_CAPABILITIES:
         revision = snapshot.get("revision")
         if not revision:
@@ -2074,6 +2093,9 @@ def offers_no_undo(kind: str, params: dict[str, Any]) -> bool:
         KIND_CONNECTION_CONNECT,
         KIND_TRUST_APP,
         KIND_SCHEDULE_UPDATE,
+        # The yes only starts a wake; the page it leads to goes back with
+        # ``dashboard_rollback``, a version like any other.
+        KIND_CREWMATE_DASHBOARD_PAGE,
     ):
         return True
     return kind == KIND_DENIED_COMMAND and params.get("action") == "add"
@@ -2601,6 +2623,11 @@ def result_summary(
 
     *failed_step* is the apply step a ``partial`` card stopped at, when known.
     """
+    if kind == KIND_CREWMATE_DASHBOARD_PAGE and status in ("applied", "cancelled", "expired"):
+        name = params.get("member")
+        if status == "applied":
+            return f"Yes: “{name}” is building its Dashboard page"
+        return f"Not now: “{name}” keeps its current Dashboard page"
     if status == "applied":
         return f"Done: {title}"
     if status == "partial":
@@ -2761,6 +2788,7 @@ HOOKED_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("PUT", "/api/members/{slug}/goals/long-term"),
         ("PUT", "/api/members/{slug}/goals/key-results"),
         ("PUT", "/api/members/{slug}/goals/schedules"),
+        ("POST", "/api/members/{slug}/dashboard/page-offer"),
         ("POST", "/api/mcp/discover/install"),
         ("POST", "/api/mcp/custom"),
         ("POST", "/api/mcp/remove"),
@@ -2787,4 +2815,5 @@ MEMORY_ROUTES: frozenset[tuple[str, str]] = HOOKED_ROUTES - {
     ("POST", "/api/agents/{name}/capabilities/preview"),
     ("GET", "/api/connections/mint"),
     ("PATCH", "/api/chat/folders/{id}"),
+    ("POST", "/api/members/{slug}/dashboard/page-offer"),
 }
