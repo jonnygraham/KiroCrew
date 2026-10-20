@@ -434,7 +434,13 @@ def _url_payload_command(n: int) -> str:
 #: Raised by four, from 32,056, for the ``app-agent-launch`` entry on the file-tool write
 #: fence and its three-line comment: the empty directory an app agent's launch copy runs
 #: kiro-cli from, which the sandbox seals read-only too.
-_PACKAGE_LINE_BUDGET = 32_060
+#: Raised again for pass 4's prefix snapshot: ``redact_credentials`` takes an optional
+#: ``token_param_prefixes`` that replaces pass 4's live read, the diagram scan
+#: (``_document_link_spans``, ``_plantuml_verdict``) hands it to its nested call, and
+#: ``_well_formed_token_param_prefixes`` is the one shape gate the live read and a
+#: snapshot share. The added lines are the keyword, its threading, docstrings and
+#: comment, and the gate. No rule, pattern or pass changed.
+_PACKAGE_LINE_BUDGET = 32_097
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

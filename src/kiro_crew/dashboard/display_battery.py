@@ -56,10 +56,14 @@ RULE_SOURCES: tuple[str, ...] = (
 _PKG_ROOT = Path(__file__).resolve().parent.parent
 
 
-def display_battery(text: str) -> str:
-    """Every display redactor, in order."""
+def display_battery(text: str, *, token_param_prefixes: tuple[str, ...] | None = None) -> str:
+    """Every display redactor, in order.
+
+    ``token_param_prefixes`` is the caller's snapshot of the pass-4 prefix set
+    (see ``redact_credentials``); ``None`` is the live read.
+    """
     out, _ = redact_exfiltration_urls(text)
-    out, _ = redact_credentials(out)
+    out, _ = redact_credentials(out, token_param_prefixes=token_param_prefixes)
     return out
 
 

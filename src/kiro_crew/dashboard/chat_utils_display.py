@@ -321,9 +321,16 @@ _NO_BASE = object()
 
 
 def _display_redaction_cache_key(
-    text: str, base: object = _NO_BASE
+    text: str,
+    base: object = _NO_BASE,
+    *,
+    token_param_prefixes: tuple[str, ...] | None = None,
 ) -> tuple[_DisplayRedactionKey, int]:
     """Digest the exact string entering the battery together with the exempt sets it reads.
+
+    ``token_param_prefixes`` is the caller's one read of the pass-4 prefix set,
+    the same snapshot it hands the battery, so the key names the set the output
+    is computed under. ``None`` reads the set here.
 
     The key is fixed-size: a 32-byte digest and the input byte length. The host set
     is sorted and folded into the MAC input behind a NUL separator (a host never
@@ -339,7 +346,9 @@ def _display_redaction_cache_key(
     hosts = "\0".join(sorted(_exempt_exact_hosts() | current_scoped_exempt_hosts())).encode(
         "utf-8", errors="surrogatepass"
     )
-    prefixes = _token_param_exempt_prefixes()
+    prefixes = token_param_prefixes
+    if prefixes is None:
+        prefixes = _token_param_exempt_prefixes()
     tail = hosts
     if prefixes:
         tail += b"\x01" + "\0".join(prefixes).encode("utf-8", errors="surrogatepass")
@@ -467,10 +476,17 @@ def _redact_for_display(text: str) -> str:
     Inside a scope that changes the battery's answer
     (:func:`_display_scope_changes_battery`) the battery runs uncached: no cache
     and no stored verdict is read or written.
+
+    The pass-4 token-parameter prefix set is read ONCE and that snapshot feeds
+    both the key and the battery. A second read inside ``redact_credentials``
+    could see another set (the platform read moves mid-process and degrades a
+    failure to the empty set), and the cache would store one set's output under
+    another set's key.
     """
     scoped = _display_scope_changes_battery()
     stored, base = (None, None) if scoped else _display_verdicts.active()
-    key, input_bytes = _display_redaction_cache_key(text, base)
+    prefixes = _token_param_exempt_prefixes()
+    key, input_bytes = _display_redaction_cache_key(text, base, token_param_prefixes=prefixes)
     ck = _clean_verdict_key(key)
     tag = key[0]
     if not scoped:
@@ -499,7 +515,7 @@ def _redact_for_display(text: str) -> str:
             _remember_redacted(key, input_bytes, verdict)
             return verdict
 
-    redacted = display_battery(text)
+    redacted = display_battery(text, token_param_prefixes=prefixes)
     if scoped:
         return redacted
     if redacted == text:
