@@ -438,7 +438,14 @@ def _url_payload_command(n: int) -> str:
 #: Raised again, from 32,060, by 37 lines for ``exfil_url_rules._heavy_percent_encoding``
 #: and its manifest entry: words percent-encoded in a URL path (a Chinese headline) do not trip the heavy
 #: percent-encoding rule. It is new rule logic, not glue; nothing else moved.
-_PACKAGE_LINE_BUDGET = 32_097
+#:
+#: Raised again, from 32,097, by 32 lines for the ``pkill``/``killall`` by-name self-kill
+#: window: ``_bare_kill_raw_bodies`` takes an anchor-basename set so the by-name leg reuses
+#: the quote-aware raw re-derivation the bare-``kill`` leg already had, the shared body
+#: search is factored into ``_raw_body_names_self``, and ``_is_self_kill`` runs the raw
+#: window once per anchor family. New detection for the public decoy shape, as a UNION with
+#: the token walk; no rule, threshold or existing pass changed.
+_PACKAGE_LINE_BUDGET = 32_129
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
