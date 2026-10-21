@@ -438,7 +438,25 @@ def _url_payload_command(n: int) -> str:
 #: Raised again, from 32,060, by 37 lines for ``exfil_url_rules._heavy_percent_encoding``
 #: and its manifest entry: words percent-encoded in a URL path (a Chinese headline) do not trip the heavy
 #: percent-encoding rule. It is new rule logic, not glue; nothing else moved.
-_PACKAGE_LINE_BUDGET = 32_097
+#:
+#: Raised again, from 32,097, for the shell-expansion bypass gate (GHSA-x2m8-5ff9-f479):
+#: ``_imds_access_via_expansion`` in ``exfil.py`` with its module note refuses a dotted
+#: IMDS token one of whose octets splices a ``$(``/``${`` expansion, and the
+#: ``/dev/tcp via shell expansion`` row in ``exfil_bash.py`` refuses a ``/dev/tc``/``/dev/ud``
+#: device name carrying one. The ``/dev/`` path is anchored as ABSOLUTE and at least one
+#: literal IMDS octet is required, so all-expansion version strings and ``~/dev/tcl`` home
+#: paths are not over-blocked. No existing pattern, threshold or pass moved.
+#:
+#: Raised again, from 32,208, hardening that same gate against three review findings
+#: (GHSA-x2m8-5ff9-f479): literal octets are now read in the resolver's bases so an OCTAL
+#: (``0251``→169) or hex spelling of the fixed octets cannot walk the token past the gate;
+#: matched brackets (``_match_closers`` feeding ``_ip_expansion_tokens``, precomputed in
+#: one linear pass) span a nested ``$((100+(154)))`` whole without a quadratic re-scan; and the
+#: ``/dev/`` rule now anchors to an absolute shell word AND a ``tcp``/``udp`` device
+#: segment, so a path rooted at ``}``/``)``/``"``/``:`` or a doubled slash is not
+#: over-blocked. The token scanner also advances past an UNTERMINATED ``$(`` so it
+#: cannot hang the event loop. No existing pattern, threshold or pass moved.
+_PACKAGE_LINE_BUDGET = 32_300
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
