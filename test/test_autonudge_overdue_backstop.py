@@ -49,7 +49,7 @@ def svc(tmp_path, event_loop):
     if live and not event_loop.is_closed():
         with contextlib.suppress(asyncio.TimeoutError):
             event_loop.run_until_complete(
-                asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout=5)
+                asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout=30)
             )
 
 
@@ -137,7 +137,10 @@ async def test_branch2_wedged_fire_is_named_not_cancelled(svc, clock, caplog):
     """A fire that never returns: the loop stays in ``_firing`` and nothing notices."""
     never: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
+    entered = asyncio.Event()
+
     async def wedge(_loop: NudgeLoop) -> bool:
+        entered.set()
         return await never
 
     svc._on_fire = wedge
@@ -145,10 +148,7 @@ async def test_branch2_wedged_fire_is_named_not_cancelled(svc, clock, caplog):
     loop = await svc.add(slot_key="chat-1-123", message="go", idle_secs=IDLE)
     _move_to(clock, loop.next_due_ts + 1)
     tick = await _tick_now(svc, loop)
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if loop.id in svc._firing:
-            break
+    await entered.wait()
     assert loop.id in svc._firing
 
     _move_to(clock, svc._fire_started[loop.id] + _timers._WEDGED_FIRE_SECS + 1)
@@ -271,7 +271,10 @@ async def test_a_long_turn_inside_the_fire_window_is_not_wedged(svc, clock, capl
     """A channel loop runs its turn inside the fire window: past its deadline is not wedged."""
     never: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
+    entered = asyncio.Event()
+
     async def long_turn(_loop: NudgeLoop) -> bool:
+        entered.set()
         return await never
 
     svc._on_fire = long_turn
@@ -279,10 +282,7 @@ async def test_a_long_turn_inside_the_fire_window_is_not_wedged(svc, clock, capl
     loop = await svc.add(slot_key="chat-1-123", message="go", idle_secs=300)
     _move_to(clock, loop.next_due_ts + 1)
     tick = await _tick_now(svc, loop)
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if loop.id in svc._firing:
-            break
+    await entered.wait()
     assert loop.id in svc._firing
 
     # Twelve minutes into the turn: four intervals past the deadline, well inside
