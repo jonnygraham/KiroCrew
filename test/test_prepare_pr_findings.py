@@ -1188,6 +1188,25 @@ class TestWholeDesignItems:
         assert "the deleted pin was the only regression guard" in out
         assert "Clears when:" not in out
 
+    def test_every_finding_span_gets_a_class_sweep_line(self, capsys) -> None:
+        module = _load_script()
+        gpt = {
+            "user": {"type": "Bot", "login": "github-actions[bot]"},
+            "body": (
+                "<!-- codex-ai-review -->\n"
+                "BLOCKING -- src/x.py:10 -- tighten -> Fix: x\n"
+                "[GPT-REVIEWED] " + _HEAD
+            ),
+        }
+        _run_findings(module, [gpt])
+
+        assert module.main(["pr_findings.py", "42"]) == 0
+
+        out = capsys.readouterr().out
+        span = module.span_hash("src/x.py", "gpt/BLOCKING")
+        assert "CLASS SWEEP span={}:".format(span) in out
+        assert out.index("span=" + span) < out.index("CLASS SWEEP span=")
+
     def test_a_stale_design_stamp_contributes_no_items(self, capsys) -> None:
         module = _load_script()
         design = {
