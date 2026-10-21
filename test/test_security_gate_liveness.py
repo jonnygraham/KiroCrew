@@ -438,7 +438,20 @@ def _url_payload_command(n: int) -> str:
 #: Raised again, from 32,060, by 37 lines for ``exfil_url_rules._heavy_percent_encoding``
 #: and its manifest entry: words percent-encoded in a URL path (a Chinese headline) do not trip the heavy
 #: percent-encoding rule. It is new rule logic, not glue; nothing else moved.
-_PACKAGE_LINE_BUDGET = 32_097
+#:
+#: Raised by 208, from 32,097, for redaction rules: a camelCase variable behind a
+#: label is code only on a line that reads as code (``_is_code_name``,
+#: ``_CODE_LINE_RE``), a secret after its key ID in a URL path is paired, the
+#: composed pass keeps a presigned link whose original bytes the URL pass judged
+#: safe, a label after ``$env:`` is a label (``_in_arn``), and the stream holds a
+#: label it sees only through escapes (``stream_hold_start`` on the normalised
+#: view, ``_LABEL_TAIL_RE``). The secret catalog keeps a keyword index
+#: (``_keyword_index``) so a short text is matched in one pass, not one per rule. It
+#: is new rule logic, not glue; nothing else moved. A whole-value reference test
+#: (``_is_reference``), the quoted-value hold to its closing quote
+#: (``open_quoted_start``, ``QUOTED_HOLD_REACH``), key-ID pairs held as one unit,
+#: and decoded text read through its normalised view add the rest.
+_PACKAGE_LINE_BUDGET = 32_305
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second

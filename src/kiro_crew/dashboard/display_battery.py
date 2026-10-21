@@ -48,7 +48,11 @@ RULE_SOURCES: tuple[str, ...] = (
     "slack_manifest.py",
     "slack-manifest.yaml",
     "security/redaction_patterns.py",
-    "security/redaction_entropy.py",
+    "security/redaction_decode.py",
+    "security/redaction_labels.py",
+    "security/redaction_normalise.py",
+    "security/secret_catalog.py",
+    "data/secret_catalog.generated.json",
     "security/exfil_url_rules.py",
     "security/exfil_oauth.py",
 )

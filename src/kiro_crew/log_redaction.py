@@ -6,8 +6,10 @@ redacted output. This module performs ZERO vault I/O — the caller resolves
 any literal secret values and passes them in via ``install_log_redaction``.
 
 Currently the only caller (``cli._setup_cli_logging``) passes an empty list,
-so the built-in patterns — Bearer tokens, AWS access key IDs, and standalone
-JWTs — are what is redacted in practice. Wiring resolved
+so the built-in patterns — labelled secrets (the secret access key, the session
+token and generic secret fields, label kept), ``Authorization`` and Bearer
+credentials, vendor tokens, unconfirmed AWS key ids (``ABIA`` / ``ACCA``),
+standalone JWTs and signing values — are what is redacted in practice. Wiring resolved
 vault secret values into the filter at gateway boot is a follow-up.
 
 Records are mutated only when redaction changes the rendered message — for
@@ -37,27 +39,138 @@ import logging
 import re
 from typing import Callable, Optional
 
-from kiro_crew.credential_patterns import AWS_KEY_ID_REDACTION, JWT_MULTI_SEGMENT
+from kiro_crew.credential_patterns import (
+    AUTHORIZATION_LABEL,
+    AUTHORIZATION_VALUE,
+    AWS_KEY_ID_REDACTION,
+    AWS_SECRET_LABEL,
+    AWS_SESSION_LABEL,
+    GENERIC_SECRET_LABEL,
+    JWT_MULTI_SEGMENT,
+    LABEL_SEPARATOR,
+    LABEL_VALUE_OR_QUOTED,
+    REFERENCE_VALUE,
+    URL_SIGNING_VALUE,
+    VENDOR_TOKEN_PATTERNS,
+)
 
 logger = logging.getLogger(__name__)
 
 # Bearer tokens: RFC 6750 token68 charset (case-insensitive to catch
-# serializations that lowercase the scheme, e.g. "bearer <token>").
-_BEARER_RE = re.compile(r"Bearer [A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+# serializations that lowercase the scheme, e.g. "bearer <token>"). A token holds a
+# digit, a token68 symbol, mixed case or more than 15 letters, so prose such as
+# "Bearer authentication failed" is left alone.
+_BEARER_RE = re.compile(
+    r"(?i:Bearer) (?:(?=[A-Za-z]*[0-9._~+/=-])|(?=[a-z]*[A-Z])(?=[A-Z]*[a-z])|(?=[A-Za-z]{16}))"
+    r"[A-Za-z0-9._~+/=-]{8,}"
+)
 
-# AWS access key IDs: fixed 4-letter prefix + exactly 16 uppercase
-# alphanumerics. Precise enough for near-zero false positives, and the ID is
-# the searchable half of a leaked AWS credential pair.
-#
-# The spellings come from ``credential_patterns``, the single home this module
-# and ``security.py``'s scrubber both import. That module imports nothing at
-# all, so it does not compromise this module's import-leaf shape (it installs
-# at CLI bootstrap, before heavy modules load, and cannot import
-# ``security.py``). The redaction spelling is a DELIBERATE SUPERSET of the
-# scrubber's -- it adds the ``ABIA``/``ACCA`` prefixes, because wider matching
-# is fail-closed for redaction -- and it is BUILT from the scrubber spelling's
-# own fragments, so that relationship holds by construction rather than by a
-# test comparing two hand-written strings.
+# Secret tier, from the shared table: a value behind a secret label (the label
+# stays), an ``Authorization`` credential, and the vendor token formats.
+_AUTHORIZATION_RE = re.compile(rf"({AUTHORIZATION_LABEL}){AUTHORIZATION_VALUE}")
+_AWS_LABELLED_RE = re.compile(
+    rf"((?:{AWS_SECRET_LABEL}|{AWS_SESSION_LABEL}){LABEL_SEPARATOR})({LABEL_VALUE_OR_QUOTED})"
+)
+_GENERIC_LABELLED_RE = re.compile(
+    rf"({GENERIC_SECRET_LABEL}{LABEL_SEPARATOR})({LABEL_VALUE_OR_QUOTED})"
+)
+_REFERENCE_RE = re.compile(REFERENCE_VALUE)
+_TAG_RE = re.compile(r"\[REDACTED[^\]\n]{0,64}\]")
+_VENDOR_TOKEN_RE = re.compile("|".join(fragment for _label, fragment in VENDOR_TOKEN_PATTERNS))
+
+
+#: How far a quoted value is read for its closing quote.
+_QUOTED_VALUE_MAX = 1024
+
+
+def _labelled_value_end(m: "re.Match[str]") -> int:
+    """Where the value of labelled match *m* ends.
+
+    A value opened by a quote runs to its unescaped closing quote on the same
+    line, so a quoted password holding a blank, ``;`` or ``,`` is dropped whole;
+    with no closing quote in reach the value ends where the pattern stopped.
+    """
+    label, text = m.group(1), m.string
+    if not label or label[-1] not in "\"'":
+        return m.end(2)
+    quote, pos = label[-1], m.start(2)
+    limit = min(len(text), pos + _QUOTED_VALUE_MAX)
+    while pos < limit:
+        char = text[pos]
+        if char == "\\":
+            pos += 2
+            continue
+        if char == quote:
+            return pos
+        if char == "\n":
+            break
+        pos += 1
+    # Still open at the line end, the record end or the bound: the value ends
+    # there, not at its first delimiter.
+    return max(m.end(2), min(pos, len(text)))
+
+
+def _sub_labelled(
+    pattern: "re.Pattern[str]",
+    text: str,
+    keep: Callable[["re.Match[str]", str], bool],
+) -> str:
+    """Replace each labelled value *pattern* finds, label kept, unless ``keep(m, value)``."""
+    out: list[str] = []
+    pos = 0
+    for m in pattern.finditer(text):
+        if m.start() < pos:
+            continue  # inside a quoted value already dropped
+        end = _labelled_value_end(m)
+        if keep(m, text[m.start(2) : end]):
+            continue
+        out.append(text[pos : m.start(2)])
+        out.append("[REDACTED]")
+        pos = end
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _in_arn(text: str, pos: int) -> bool:
+    """A label word right after a ``:`` of an ARN is a resource type; after
+    ``$env:`` or any other colon it is still a label."""
+    if pos == 0 or text[pos - 1] != ":":
+        return False
+    token = text[max(0, pos - 256) : pos].split()
+    return bool(token) and "arn:" in token[-1].lower()
+
+
+def _keep_aws_value(m: "re.Match[str]", value: str) -> bool:
+    """An AWS label's value is kept when shorter than 8 or a reference (``$VAR``)."""
+    return (
+        len(value) < 8
+        or _REFERENCE_RE.fullmatch(value) is not None
+        or _TAG_RE.fullmatch(value) is not None
+    )
+
+
+def _keep_generic_value(m: "re.Match[str]", value: str) -> bool:
+    """A generic label's value is kept unless it looks like one (8+ chars, not a
+    single-case word, not a reference or a path, not a word inside an ARN)."""
+    return (
+        len(value) < 8
+        or _REFERENCE_RE.fullmatch(value) is not None
+        or value.startswith(("/", "~/", "./", "../"))
+        or _TAG_RE.fullmatch(value) is not None
+        # Inside an ARN (``...:secret:name``) the word is a resource type.
+        or _in_arn(m.string, m.start())
+        # A single-case word is prose (``password: required``), not a value.
+        or (value.isalpha() and (value.islower() or value.isupper()) and len(value) <= 15)
+    )
+
+
+# AWS ``ABIA`` / ``ACCA`` key ids, whose tier is not yet confirmed. An ``AKIA`` /
+# ``ASIA`` access key ID is Identifier tier and stays visible, so a log line can
+# still be joined to the key it names. The spelling comes from
+# ``credential_patterns``, which imports nothing, so this module stays an import
+# leaf (it installs at CLI bootstrap, before heavy modules load).
 _AWS_KEY_ID_RE = re.compile(AWS_KEY_ID_REDACTION)
 
 # Standalone JWTs: the shared ``eyJ`` header plus 2-4 further dot-separated
@@ -65,6 +178,56 @@ _AWS_KEY_ID_RE = re.compile(AWS_KEY_ID_REDACTION)
 # Catches tokens logged OUTSIDE a ``Bearer `` scheme -- JSON-embedded, bare, or
 # assignment-style. Same string object as the scrubber's JWS/JWE branch.
 _JWT_RE = re.compile(JWT_MULTI_SEGMENT)
+
+# A presigned or signed link's signing values. The key ID in the link is an
+# Identifier and stays visible; removing the part that makes the link work -- the
+# SigV4/SigV2 signature and the session token -- is what stops a signed link in a
+# CLI log being replayed. Shared import-free spelling, so this module stays an
+# install-time import leaf.
+_URL_SIGNING_RE = re.compile(URL_SIGNING_VALUE)
+
+# One ``name=value`` (or ``name%3Dvalue``) query/header parameter. The name may carry
+# percent-encoded octets; the value runs to the next delimiter. The name is anchored
+# with a negative look-behind AND bounded to 128 chars so a match can never START
+# inside a long ``[A-Za-z0-9%._-]`` run (a base64url or hex blob in a logged frame):
+# without both, the engine restarts at every position in such a run and backtracks it
+# to the end, which is quadratic and can stall the thread that logs the line.
+_PRESIGNED_PARAM_RE = re.compile(
+    r"(?<![A-Za-z0-9%._-])([A-Za-z0-9%._-]{1,128})(=|%3[Dd])([^\s\"'&;#<>)\]}]+)"
+)
+_PCT_OCTET_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+# Parameter names whose VALUE makes a signed link work. The key ID
+# (``AWSAccessKeyId`` / ``X-Amz-Credential``) is deliberately absent: it is an
+# Identifier and stays visible, so a logged link can still be joined to its key.
+_SIGNING_PARAM_NAMES = frozenset({"signature", "x-amz-signature", "x-amz-security-token"})
+
+
+def _decode_pct_ascii(name: str) -> str:
+    """Resolve ``%XX`` octets in a parameter name so ``%53ignature`` reads as its
+    real name. Import-free -- it reuses the already-imported ``re`` and never pulls
+    in ``urllib.parse``, keeping this module an install-time import leaf.
+    """
+    return _PCT_OCTET_RE.sub(lambda m: chr(int(m.group(1), 16)), name)
+
+
+def _redact_signing_params(line: str) -> str:
+    """Drop the value of every signing parameter in *text* while keeping the key
+    ID and ordinary parameters. The name is matched after percent-decoding, so an
+    obfuscated ``%53ignature`` is caught, and the value is removed whatever its
+    shape (64-hex SigV4, DER-hex SigV4A, or base64 SigV2). Keying on the decoded
+    NAME is what bounds this: only a signing parameter's value goes, so running it
+    on every record -- not only lines carrying a literal marker, which a
+    percent-encoded ``%41WSAccessKeyId`` would hide -- cannot touch prose, since a
+    bare ``signature`` in prose is not followed by ``=``/``%3D`` and a value.
+    """
+
+    def repl(m: "re.Match[str]") -> str:
+        name, sep = m.group(1), m.group(2)
+        if _decode_pct_ascii(name).lower() in _SIGNING_PARAM_NAMES:
+            return f"{name}{sep}[REDACTED]"
+        return m.group(0)
+
+    return _PRESIGNED_PARAM_RE.sub(repl, line)
 
 
 class SecretRedactionFilter:
@@ -92,15 +255,28 @@ class SecretRedactionFilter:
         )
 
     def redact(self, text: str) -> str:
-        """Replace secret values, Bearer tokens, AWS key IDs, and JWTs.
+        """Replace secret values, labelled secrets (label kept), Authorization and
+        Bearer credentials, vendor tokens, unconfirmed AWS key ids, JWTs, and
+        presigned/signed-link signing values.
 
         Zero I/O — only applies pre-compiled patterns.
         """
         if self._secret_pattern is not None:
             text = self._secret_pattern.sub("[REDACTED]", text)
+        text = _AUTHORIZATION_RE.sub(r"\1[REDACTED]", text)
         text = _BEARER_RE.sub("Bearer [REDACTED]", text)
+        text = _sub_labelled(_AWS_LABELLED_RE, text, _keep_aws_value)
+        text = _sub_labelled(_GENERIC_LABELLED_RE, text, _keep_generic_value)
+        text = _VENDOR_TOKEN_RE.sub("[REDACTED]", text)
         text = _AWS_KEY_ID_RE.sub("[REDACTED]", text)
         text = _JWT_RE.sub("[REDACTED]", text)
+        text = _URL_SIGNING_RE.sub("[REDACTED]", text)
+        # Drop a signing parameter's value even under a percent-encoded name
+        # (``%53ignature``) or beside a percent-encoded marker. Keyed on the
+        # decoded NAME, so it runs on every record without a literal-marker
+        # prerequisite that an encoded marker would slip past; the anchored,
+        # bounded name keeps it linear.
+        text = _redact_signing_params(text)
         return text
 
 
