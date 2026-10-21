@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useMemo, useState, useRef } from 'react'
+import { memo, useCallback, useContext, useEffect, useMemo, useState, useRef } from 'react'
 import { Copy, Check, MessageSquare, MessageSquarePlus } from 'lucide-react'
 import type { LineAnnotation, SelectedLineRange } from '@pierre/diffs'
 import { copyCode } from '../utils/clipboard'
@@ -7,7 +7,7 @@ import { HOVER_NONE_ACTIONS_ROW_CLS } from '../utils/touchActions'
 import { useStagedMount, VIEWPORT_PRELOAD_MARGIN_PX } from './pierreStaging'
 import { useNearViewport } from '../hooks/useNearViewport'
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight'
-import { CodeCommentContext, type CodeLineAnnotationMeta } from './codeComments'
+import { CodeCommentContext, holdCodeBlock, holdCodeChip, type CodeLineAnnotationMeta } from './codeComments'
 
 import { i18nT } from '../i18n/t'
 import { useLanguageGeneration } from '../i18n/useLanguageGeneration'
@@ -74,6 +74,41 @@ const chipBaseStyle: React.CSSProperties = {
   lineHeight: '16px',
   fontFamily: 'inherit',
   cursor: 'pointer',
+}
+
+/** A code thread's count chip. It registers itself as the thread's live
+ *  anchor, so the popover tracks it on scroll and can find it from the
+ *  sidebar (it sits in Pierre's shadow DOM, out of `querySelector`'s reach). */
+function ThreadChip(
+  { meta, filled, onActivate }: { meta: CodeLineAnnotationMeta; filled: boolean; onActivate: (id: string) => void },
+) {
+  const ref = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    return el ? holdCodeChip(meta.id, el) : undefined
+  }, [meta.id])
+  return (
+    <button
+      ref={ref}
+      type="button"
+      // CommentThreadPopover's click-away skips this marker (read through
+      // the composed path), so re-clicking the open thread's chip keeps
+      // the popover and its unsent reply.
+      data-mc-code-chip=""
+      aria-label={i18nT('components.codeBlock.comment_thread', { count: meta.count })}
+      title={i18nT('components.codeBlock.comment_thread', { count: meta.count })}
+      style={{
+        ...chipBaseStyle,
+        border: '1px solid var(--accent, #5a8cff)',
+        background: filled ? 'var(--accent, #5a8cff)' : 'transparent',
+        color: filled ? 'var(--accent-fg, #fff)' : 'var(--accent, #5a8cff)',
+      }}
+      onClick={() => onActivate(meta.id)}
+    >
+      <MessageSquare size={12} aria-hidden="true" />
+      {meta.count}
+    </button>
+  )
 }
 
 export const CodeBlock = memo(function CodeBlock(
@@ -228,32 +263,17 @@ export const CodeBlock = memo(function CodeBlock(
       // Filled while unread or active, outline once read — mirrors the prose
       // overlay's bubble language so the two comment surfaces read as one.
       const filled = m.unread || active
-      return (
-        <button
-          type="button"
-          // CommentThreadPopover's click-away skips this marker (read through
-          // the composed path), so re-clicking the open thread's chip keeps
-          // the popover and its unsent reply.
-          data-mc-code-chip=""
-          aria-label={i18nT('components.codeBlock.comment_thread', { count: m.count })}
-          title={i18nT('components.codeBlock.comment_thread', { count: m.count })}
-          style={{
-            ...chipBaseStyle,
-            border: '1px solid var(--accent, #5a8cff)',
-            background: filled ? 'var(--accent, #5a8cff)' : 'transparent',
-            color: filled ? 'var(--accent-fg, #fff)' : 'var(--accent, #5a8cff)',
-          }}
-          onClick={e => {
-            const r = e.currentTarget.getBoundingClientRect()
-            commenting.ctx.onActivate(m.id, { x: r.left, y: r.top, w: r.width, h: r.height })
-          }}
-        >
-          <MessageSquare size={12} aria-hidden="true" />
-          {m.count}
-        </button>
-      )
+      return <ThreadChip meta={m} filled={filled} onActivate={commenting.ctx.onActivate} />
     }
     : undefined
+  // Each routed thread's fallback anchor is this block, so a sidebar click on
+  // a thread whose chip is not mounted yet still scrolls here.
+  useEffect(() => {
+    const el = nearRef.current
+    if (!el || !annotations) return
+    const releases = annotations.map(a => holdCodeBlock((a.metadata as CodeLineAnnotationMeta).id, el))
+    return () => releases.forEach(r => r())
+  }, [annotations])
 
   return (
     <div ref={nearRef} className="code-block group/code rounded-xl border border-border bg-bg-elevated overflow-hidden">

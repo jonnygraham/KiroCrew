@@ -4,6 +4,7 @@ import type { ArtifactComment } from '../types'
 import { CommentDraftReportProvider, CommentRow } from './CommentsSidebar'
 import { useImeGuard } from '../hooks/useImeGuard'
 import { useAutoGrowTextarea } from '../hooks/useAutoGrowTextarea'
+import { codeAnchorElement, onCodeAnchorsChange } from './codeComments'
 
 import { i18nT } from '../i18n/t'
 /**
@@ -25,6 +26,11 @@ const GAP = 8
  * to hold it (e.g. 320px phones), so the close/reply controls stay reachable
  * for BOTH prose and code threads — the popover is shared by both surfaces. */
 const cardW = (vw: number) => Math.min(CARD_W, vw - GAP * 2)
+
+/** A prose thread's light-DOM highlight, else a code thread's chip (or the
+ *  code block that owns it): both are read live, so the card follows them. */
+const anchorElement = (rootId: string): HTMLElement | null =>
+  (document.querySelector(`[data-mc-cid="${CSS.escape(rootId)}"]`) as HTMLElement | null) ?? codeAnchorElement(rootId)
 
 interface Props {
   comments: ArtifactComment[]
@@ -83,7 +89,7 @@ export function CommentThreadPopover({
     if (rect) {
       aTop = rect.y; aBottom = rect.y + rect.h; aLeft = rect.x
     } else {
-      const el = document.querySelector(`[data-mc-cid="${CSS.escape(rootId)}"]`) as HTMLElement | null
+      const el = anchorElement(rootId)
       if (!el) { setPos({ top: Math.max(GAP, (vh - cardH) / 2), left: Math.max(GAP, vw - cardW(vw) - 24) }); return }
       const r = el.getBoundingClientRect()
       aTop = r.top; aBottom = r.bottom; aLeft = r.left
@@ -100,16 +106,18 @@ export function CommentThreadPopover({
   useLayoutEffect(() => {
     // Bring the markdown anchor into view before positioning.
     if (!rect) {
-      const el = document.querySelector(`[data-mc-cid="${CSS.escape(rootId)}"]`) as HTMLElement | null
+      const el = anchorElement(rootId)
       el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
     }
     reposition()
     const onMove = () => reposition()
     window.addEventListener('scroll', onMove, true)
     window.addEventListener('resize', onMove)
+    const offAnchors = rect ? undefined : onCodeAnchorsChange(onMove)
     return () => {
       window.removeEventListener('scroll', onMove, true)
       window.removeEventListener('resize', onMove)
+      offAnchors?.()
     }
   }, [rootId, rect, reposition])
 

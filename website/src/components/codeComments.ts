@@ -213,8 +213,11 @@ export function routeCodeComments(
       : 0
     let line = 1
     const end = Math.min(at + Math.max(quote.length, storedLen), span.contentEnd)
+    // Every newline before `end` starts a new line, the last one included: a
+    // quote never carries its last line's terminator, so a trailing newline
+    // means the range ends on a selected EMPTY line, and the chip goes there.
     for (let i = span.contentStart; i < end; i++) {
-      if (source.charCodeAt(i) === 10 && i < end - 1) line++
+      if (source.charCodeAt(i) === 10) line++
     }
     const list = byFence.get(span.contentStartLine) ?? []
     list.push({
@@ -292,9 +295,44 @@ export interface CodeCommentContextValue {
   onCommentRange(req: CodeCommentRangeRequest): void
   /** Active thread id (annotation renders in its active state). */
   activeId: string | null
-  /** Open the thread. `rect` is the chip's viewport box: the thread popover
-   *  cannot find a shadow-DOM chip by `data-mc-cid`, so it anchors to this. */
+  /** Open the thread. The popover finds the chip through
+   *  {@link codeAnchorElement}, so a chip click passes no rect. */
   onActivate(id: string, rect?: { x: number; y: number; w: number; h: number }): void
+}
+
+/* Live anchors for code threads, by root comment id. A chip lives in Pierre's
+ * shadow DOM, where `document.querySelector('[data-mc-cid]')` cannot reach it,
+ * so the thread popover asks here instead: the chip while it is mounted, else
+ * the code block that owns the thread (a block far from the viewport renders
+ * no chip yet). Looked up on every reposition, so the popover follows the chip
+ * as the page scrolls, and a sidebar click can scroll the block into view. */
+const codeChipEls = new Map<string, HTMLElement>()
+const codeBlockEls = new Map<string, HTMLElement>()
+
+const codeAnchorListeners = new Set<() => void>()
+const notifyCodeAnchors = () => codeAnchorListeners.forEach(fn => fn())
+
+function holdAnchor(map: Map<string, HTMLElement>, id: string, el: HTMLElement): () => void {
+  map.set(id, el)
+  notifyCodeAnchors()
+  return () => { if (map.get(id) === el) { map.delete(id); notifyCodeAnchors() } }
+}
+
+/** Call `fn` whenever a code anchor mounts or unmounts (a chip appearing once
+ *  its block is highlighted moves the popover onto it); returns the unsubscribe. */
+export function onCodeAnchorsChange(fn: () => void): () => void {
+  codeAnchorListeners.add(fn)
+  return () => { codeAnchorListeners.delete(fn) }
+}
+
+/** Register a thread chip; returns the release to call on unmount. */
+export const holdCodeChip = (id: string, el: HTMLElement) => holdAnchor(codeChipEls, id, el)
+/** Register the code block that owns a thread; returns the release. */
+export const holdCodeBlock = (id: string, el: HTMLElement) => holdAnchor(codeBlockEls, id, el)
+
+/** The element a code thread's popover should anchor to and scroll to. */
+export function codeAnchorElement(id: string): HTMLElement | null {
+  return codeChipEls.get(id) ?? codeBlockEls.get(id) ?? null
 }
 
 /** Provided by the artifact detail page when inline commenting is available;

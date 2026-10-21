@@ -18,7 +18,7 @@ interface CapturedProps {
   renderGutterUtility?: (getHoveredLine: () => { lineNumber: number } | undefined) => React.ReactNode
 }
 
-const hoisted = vi.hoisted(() => ({ captured: [] as CapturedProps[] }))
+const hoisted = vi.hoisted(() => ({ captured: [] as CapturedProps[], hideAnnotations: false }))
 
 vi.mock('../pierre', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -29,7 +29,7 @@ vi.mock('../pierre', async importOriginal => ({
     return (
       <div data-testid="pierre-code">
         {props.renderGutterUtility?.(() => ({ lineNumber: 2 }))}
-        {props.lineAnnotations?.map((a, i) => (
+        {!hoisted.hideAnnotations && props.lineAnnotations?.map((a, i) => (
           <div key={i} data-testid="annotation-slot">{props.renderAnnotation?.(a)}</div>
         ))}
       </div>
@@ -38,7 +38,7 @@ vi.mock('../pierre', async importOriginal => ({
 }))
 
 import { CodeBlock } from '../components/CodeBlock'
-import { CodeCommentContext, type CodeCommentContextValue, type CodeLineAnnotationMeta } from '../components/codeComments'
+import { CodeCommentContext, codeAnchorElement, type CodeCommentContextValue, type CodeLineAnnotationMeta } from '../components/codeComments'
 
 const CODE = 'line one\nline two\nline three'
 
@@ -121,8 +121,32 @@ describe('CodeBlock commenting wiring', () => {
     const p = hoisted.captured.at(-1)!
     expect(p.lineAnnotations).toEqual([{ lineNumber: 2, metadata: { id: 'c9', line: 2, count: 3, unread: false } }])
     fireEvent.click(screen.getByRole('button', { name: 'Comment thread (3)' }))
-    // The chip's box rides along: the popover cannot find a shadow-DOM chip
-    // by selector, so it anchors to this rect instead of a fallback spot.
-    expect(ctx.onActivate).toHaveBeenCalledWith('c9', expect.objectContaining({ x: expect.any(Number), y: expect.any(Number), w: expect.any(Number), h: expect.any(Number) }))
+    // No frozen rect: the popover looks the chip up live (codeAnchorElement),
+    // so it follows the chip when the page scrolls.
+    expect(ctx.onActivate).toHaveBeenCalledWith('c9')
+  })
+
+  it('registers its chip as the thread live anchor, and releases it on unmount', () => {
+    const ctx = ctxValue({ annotations: [{ id: 'c9', line: 2, count: 3, unread: false }] })
+    const { unmount } = mount(ctx, 3)
+    expect(codeAnchorElement('c9')).toBe(screen.getByRole('button', { name: 'Comment thread (3)' }))
+    unmount()
+    expect(codeAnchorElement('c9')).toBeNull()
+  })
+
+  it('registers the block as the anchor while its chip is not mounted', () => {
+    const ctx = ctxValue({ annotations: [{ id: 'c9', line: 2, count: 3, unread: false }] })
+    hoisted.captured.length = 0
+    hoisted.hideAnnotations = true
+    try {
+      const { container } = render(
+        <CodeCommentContext.Provider value={ctx}>
+          <CodeBlock code={CODE} lang="ts" complete sourceStartLine={3} />
+        </CodeCommentContext.Provider>,
+      )
+      expect(codeAnchorElement('c9')).toBe(container.querySelector('.code-block'))
+    } finally {
+      hoisted.hideAnnotations = false
+    }
   })
 })

@@ -295,6 +295,15 @@ describe('multi-line chip placement', () => {
     const c = comment('ml', { quote: a.quote, prefix: a.prefix, suffix: a.suffix, start_offset: a.startOffset, end_offset: a.endOffset })
     expect(routeCodeComments(DOC, codeFenceSpans(DOC), [c]).byFence.get(4)).toEqual([{ id: 'ml', line: 3, count: 1, unread: false }])
   })
+
+  it('puts the chip under a selected empty last line, not the line above it', () => {
+    const src = '```ts\nconst a = 1\n\nconst b = 2\n```\n'
+    const [span] = codeFenceSpans(src)
+    const a = buildCodeCommentAnchor(src, span, 1, 2)!
+    expect(a.quote).toBe('const a = 1\n')
+    const c = comment('el', { quote: a.quote, prefix: a.prefix, suffix: a.suffix, start_offset: a.startOffset, end_offset: a.endOffset })
+    expect(routeCodeComments(src, [span], [c]).byFence.get(span.contentStartLine)).toEqual([{ id: 'el', line: 2, count: 1, unread: false }])
+  })
 })
 
 describe('proseOverlayComments', () => {
