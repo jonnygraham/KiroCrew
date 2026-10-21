@@ -958,13 +958,26 @@ def _fold_const_output_substitutions(body: str, resolve: "Callable[[str], str]")
             return match.group(0)
         return out
 
+    def fold_pass(text: str) -> str:
+        # Fold only a real span: a match starts at an opener the quote mask recorded
+        # and ends at that span's end, so a closing backtick never pairs with the next.
+        out: list[str] = []
+        last = 0
+        for start in sorted(ends):
+            match = None if start < last else _CONST_OUTPUT_SUBST_RE.match(text, start)
+            if match is not None and match.end() == ends[start]:
+                out += [text[last:start], fold(match)]
+                last = match.end()
+        return "".join(out) + text[last:]
+
     # A fold splices no opener back in, so each changing pass peels a level.
     for _ in range(_FOLD_DEPTH_CAP + 1):
-        folded = _CONST_OUTPUT_SUBST_RE.sub(fold, body)
+        folded = fold_pass(body)
         if folded == body:
             return body
         body = folded
-        mask = _quote_mask(body)
+        ends.clear()
+        mask = _quote_mask(body, ends=ends)
     return None  # not converged within the pass budget: fail closed
 
 
@@ -1195,6 +1208,9 @@ def _synthesis_words(body: str, resolve: "Callable[[str], str]", limit: int) -> 
         tokens = _self_command_tokens(masked)
         for word in _split_glued_operators(tokens):
             size = len(word) + sum(sizes.get(ref, 0) for ref in _VAR_REF_RE.findall(word))
+            # ``${!y}`` builds the variable ``y`` NAMES, which no length here records:
+            # each is sized as the largest tracked value, never under-counted.
+            size += len(_INDIRECT_VAR_USE_RE.findall(word)) * max(sizes.values(), default=0)
             total += size
             if total > limit:
                 return None
