@@ -34,8 +34,14 @@ With ``--check-body`` it also reads the PR body the skill writes --
   the checkout, so a branch cannot weaken its own check, and run on the body.
   A failure prints that script's message; that is exit 22. A base without the
   script (another repo) skips it silently.
+* **Sibling sweep (advisory until CI enforces it).** On a ``fix``/``revert`` title (the
+  branch's first commit subject) the body's ``## Sibling sweep`` section is judged by
+  ``.github/scripts/sibling_list_check.py``, also read from ``origin/<base>``. While CI's
+  step is in warn mode the findings print and the exit stays 0; once the script turns red
+  for this pull request, the same findings are exit 23. A base without the script skips it.
 
-All checks run and print before any exit; when several breach, the lowest code wins.
+All checks run and print before any exit; the first non-zero code in the order
+accounting/length (20, 21), template (22), sibling sweep (23) is the exit code.
 
 Size and age signals are printed, never an exit code. ``! SIZE`` appears at
 ``SIZE_HINT_FILES`` changed files and says more at ``SIZE_STOP_FILES``, where CI's
@@ -46,7 +52,8 @@ the machine.
 
 Usage:  python3 diff_signals.py [base-branch] [--check-body] [--age]
 Exit:   0 printed / body passes | 20 unaccounted area(s) | 21 What changed too long |
-        22 template sections missing | 2 environment error
+        22 template sections missing | 23 Sibling sweep missing or malformed (when enforced) |
+        2 environment error
 """
 
 import argparse
@@ -98,6 +105,9 @@ BODY_FILENAME = "prepare-pr-body.md"
 
 # CI's template check, read from origin/<base> by --check-body.
 TEMPLATE_CHECK = ".github/scripts/pr-description-check.sh"
+
+# CI's Sibling sweep check, read from origin/<base> by --check-body.
+SIBLING_CHECK = ".github/scripts/sibling_list_check.py"
 
 # Bare file names that appear in many places at once; naming one of these does
 # not tell the reader WHICH one changed, so it never satisfies the accounting.
@@ -395,6 +405,55 @@ def template_check(body, base):
     return 22
 
 
+def sibling_check(body, base):
+    """Run the base ref's ``SIBLING_CHECK`` on ``body``; return 0 or 23.
+
+    The script prints its findings and exits 1 only when it is enforcing, so a
+    warn-mode finding is shown here and never stops the loop. Absent on the base
+    (another repo, or before the check landed) is a silent skip.
+    """
+    rc, script, _ = run(["git", "show", "origin/{}:{}".format(base, SIBLING_CHECK)])
+    if rc != 0:
+        return 0
+    # The pull request title is the squash message of a one-commit branch; with the
+    # permitted second (mechanical) commit it is still the first commit's subject.
+    subjects = run(["git", "log", "--reverse", "--format=%s", "origin/{}..HEAD".format(base)])[1]
+    title = subjects.splitlines()[0].strip() if subjects.strip() else ""
+    merge_base = run(["git", "merge-base", "origin/" + base, "HEAD"])[1].strip()
+    head = run(["git", "rev-parse", "HEAD"])[1].strip()
+    if not (title and merge_base and head):
+        print("WARN: cannot resolve HEAD or the merge-base - sibling sweep check skipped")
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        script_path = os.path.join(tmp, "sibling_list_check.py")
+        with open(script_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(script)
+        env = dict(os.environ, PR_TITLE=title, PR_BODY=body, MERGE_BASE=merge_base, HEAD_SHA=head)
+        env.pop("GITHUB_ACTIONS", None)  # plain lines here, not workflow annotations
+        env.pop("PR_CREATED_AT", None)
+        try:
+            p = subprocess.run(
+                [sys.executable, script_path],
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as exc:
+            print(
+                "WARN: cannot run {} ({}) - sibling sweep check skipped".format(SIBLING_CHECK, exc)
+            )
+            return 0
+    for line in p.stdout.splitlines():
+        print(line)
+    if p.returncode == 1:
+        return 23
+    if p.returncode != 0:
+        print("WARN: {} could not run ({}) - skipped".format(SIBLING_CHECK, p.stderr.strip()))
+    return 0
+
+
 def parse_args(argv):
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("base", nargs="?", default="")
@@ -478,7 +537,8 @@ def main(argv):
     if body is not None:
         rc = check_body(body, ns)
         tpl = template_check(body, base)
-        return rc or tpl
+        sibling = sibling_check(body, base)
+        return rc or tpl or sibling
     return 0
 
 
