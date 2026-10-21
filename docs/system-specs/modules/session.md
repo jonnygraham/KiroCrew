@@ -147,12 +147,17 @@ sub-agent and MCP App state in [side](side.md), [subagent](subagent.md) and
 ## Return-triggered warm task brief
 
 The owner-only `slot_focused` WebSocket frame also drives the warm task brief.
-When the last owner connection viewing a thread sends `{slot: null, hidden:
-true}` or a frame naming another thread, that thread starts an in-memory away
-episode. The episode ends the next time any owner frame names the thread
-again; frames for other threads leave it alone. That return qualifies after at
-least 30 minutes. Socket cleanup, reconnect, ordinary null frames, focus loss,
-and elapsed time alone never start work. A return while the thread runs a turn
+Every owner frame naming a crewmate thread is a possible return, including a
+re-announce of the same thread and a reconnect re-send. Time away is read from
+the thread's durable history, off the event loop: the time since the later of
+the owner's last genuine (non-injected) user message and the last brief claim
+row. A return qualifies when that is at least 30 minutes, so a gateway
+restart, a tab left open, a covered window, or a dropped socket cannot lose an
+absence. A thread with no genuine user message never qualifies. Null frames,
+socket cleanup and elapsed time alone never start work. The open-task check
+reads the small session and work ledgers before the history, and a too-recent
+result is cached in memory until it can expire, so repeated focus frames stay
+cheap. A return while the thread runs a turn
 waits for the turn to end, up to 30 minutes, while the owner keeps the thread
 on screen. Each skip logs one debug line with the thread key and a fixed reason.
 
@@ -164,14 +169,16 @@ genuine user request, conversation task rows, session ledger, and work ledger.
 The model result is a second ordinary mate message in first-person prose:
 what the user asked for, where it stands, and one to three suggestions, with no
 headings or lists. These generated rows
-are excluded from the task fingerprint. A new user turn, a new away episode,
+are excluded from the task fingerprint. A new user turn, the owner leaving,
 slot replacement, reset, close, and a finished task drop a stale result
 unposted. Patrol turns, `[work-ledger wake]` rows, and worker reports change
 the dedup fingerprint but do not make a prepared result stale; a turn running
 at publication defers the result until it ends. Only a live user row the person
 typed cancels a brief in preparation; assistant rows, automation rows and turn
-admission never do.
-Away state is never persisted, so restart and network loss fail silent.
+admission never do. Repeated frames, reconnects and several windows share one
+in-flight task and then the durable claim, so each task state gets at most one
+brief, and the claim's time keeps a patrol-changed fingerprint from briefing
+again until another 30 minutes pass without the owner typing.
 
 ## Implementation Boundaries
 

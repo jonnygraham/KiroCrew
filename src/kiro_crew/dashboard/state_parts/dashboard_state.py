@@ -533,13 +533,10 @@ class DashboardState:
         # connection (``slot_retention.note_foreground``). The idle sweep never
         # archives a slot someone is looking at.
         self._foreground_slots: dict[int, str] = {}
-        # Return-triggered warm task briefs keep only presence episodes and live
-        # generation tasks in memory. The durable claim itself lives beside the
-        # transcript, so a gateway restart can deduplicate but can never infer a
-        # leave that this process did not observe.
-        self._warm_task_brief_away: dict[str, tuple[float, int]] = {}
-        self._warm_task_brief_generation = 0
-        self._warm_task_brief_slot_generation: dict[str, int] = {}
+        # Return-triggered warm task briefs read the away time and the claim
+        # from the transcript, so they survive a restart. Memory holds only the
+        # live tasks and a read-saving "not eligible before" cache.
+        self._warm_task_brief_not_before: dict[str, float] = {}
         self._warm_task_brief_tasks: dict[str, asyncio.Task[Any]] = {}
         self._warm_task_brief_model_active: set[str] = set()
         self._slack_to_slot: dict[str, str] = {}  # Slack session_key → slot name

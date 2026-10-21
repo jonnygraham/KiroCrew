@@ -1747,15 +1747,9 @@ async def _serve_ws(
                             state, data.get("slot"), _focus_task, owner=owner_request
                         )
                         if owner_request:
-                            # Warm presence reads the registry's PREVIOUS row, so
+                            # The warm brief reads the registry's PREVIOUS row, so
                             # it must run before retention applies this frame.
-                            # Socket-finally cleanup intentionally never calls it.
-                            handle_focus_frame(
-                                state,
-                                id(ws),
-                                data.get("slot"),
-                                hidden=data.get("hidden", False),
-                            )
+                            handle_focus_frame(state, id(ws), data.get("slot"))
                             note_foreground(state, id(ws), data.get("slot"))
                     elif msg_type == "slot_read":
                         _relayed = _handle_slot_read(
