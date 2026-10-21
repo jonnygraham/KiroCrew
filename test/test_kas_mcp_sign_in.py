@@ -657,3 +657,173 @@ def test_rotation_continues_after_the_last_offered_server_leaves():
     handle._mcp_sign_in_needed = {"a", "c"}
     handle._offer_mcp_sign_in()
     assert begun == [("s1", "c")]
+
+
+# ── an ended attempt retires its dead link, idle or not ───────────────────────
+
+
+async def _end_sign_in(runtime: AcpRuntime, monkeypatch, answer) -> None:
+    """Run one sign-in for s1/remote. *answer* is the reset's answer, None for a
+    timeout, or an exception instance to raise."""
+
+    async def send_and_await(method, params, timeout=0):
+        if answer is None:
+            raise asyncio.TimeoutError
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(runtime, "_send_and_await", send_and_await)
+    assert runtime.begin_mcp_sign_in("s1", "remote") is True
+    await asyncio.gather(*runtime._answer_tasks)
+
+
+@pytest.mark.parametrize("answer", [None, {}])
+@pytest.mark.asyncio
+async def test_an_unconnected_end_calls_the_sessions_hook_while_the_slot_is_held(
+    monkeypatch, answer
+):
+    runtime = _runtime()
+    calls: list = []
+    runtime.set_mcp_sign_in_ended_hook(
+        "s1", lambda name: calls.append((name, runtime._mcp_sign_in))
+    )
+    await _end_sign_in(runtime, monkeypatch, answer)
+    # Called while the slot is still held, so no newer sign-in's link can be
+    # shown before the old one is retired.
+    assert calls == [("remote", ("s1", "remote"))]
+    assert runtime._mcp_sign_in is None
+    assert runtime._session_queues["s1"].empty()
+
+
+@pytest.mark.asyncio
+async def test_a_connected_end_does_not_call_the_hook(monkeypatch):
+    runtime = _runtime()
+    calls: list = []
+    runtime.set_mcp_sign_in_ended_hook("s1", calls.append)
+    await _end_sign_in(runtime, monkeypatch, {"success": True})
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_another_sessions_hook_is_not_called(monkeypatch):
+    runtime = _runtime()
+    calls: list = []
+    runtime.set_mcp_sign_in_ended_hook("s2", calls.append)
+    await _end_sign_in(runtime, monkeypatch, None)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_unregistering_a_session_drops_its_hook(monkeypatch):
+    runtime = _runtime()
+    calls: list = []
+    runtime.set_mcp_sign_in_ended_hook("s1", calls.append)
+    runtime.unregister_session("s1")
+    runtime._session_queues["s1"] = asyncio.Queue()
+    await _end_sign_in(runtime, monkeypatch, None)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_departed_session_is_not_told(monkeypatch):
+    runtime = _runtime()
+    calls: list = []
+    runtime.set_mcp_sign_in_ended_hook("s1", calls.append)
+    gate = asyncio.Event()
+
+    async def send_and_await(method, params, timeout=0):
+        await gate.wait()
+        return {}
+
+    monkeypatch.setattr(runtime, "_send_and_await", send_and_await)
+    assert runtime.begin_mcp_sign_in("s1", "remote") is True
+    runtime.unregister_session("s1")
+    gate.set()
+    await asyncio.gather(*runtime._answer_tasks)
+    assert calls == []
+    assert runtime._mcp_sign_in is None
+
+
+@pytest.mark.asyncio
+async def test_a_failing_hook_still_frees_the_slot(monkeypatch, caplog):
+    runtime = _runtime()
+
+    def boom(name):
+        raise RuntimeError("display failed")
+
+    runtime.set_mcp_sign_in_ended_hook("s1", boom)
+    await _end_sign_in(runtime, monkeypatch, None)
+    assert runtime._mcp_sign_in is None
+    assert "MCP sign-in ended hook failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_dead_process_leaves_the_banner_to_the_dead_child_gate(monkeypatch):
+    from kiro_crew.acp.session_handle import AcpRuntimeDead
+
+    runtime = _runtime()
+    calls: list = []
+    runtime.set_mcp_sign_in_ended_hook("s1", calls.append)
+    await _end_sign_in(runtime, monkeypatch, AcpRuntimeDead("process exited"))
+    assert calls == []
+    assert runtime._mcp_sign_in is None
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_attempt_does_not_call_the_hook(monkeypatch):
+    runtime = _runtime()
+    calls: list = []
+    runtime.set_mcp_sign_in_ended_hook("s1", calls.append)
+    gate = asyncio.Event()
+
+    async def hang(method, params, timeout=0):
+        await gate.wait()
+        return {}
+
+    monkeypatch.setattr(runtime, "_send_and_await", hang)
+    assert runtime.begin_mcp_sign_in("s1", "remote") is True
+    tasks = list(runtime._answer_tasks)
+    await asyncio.sleep(0)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    assert calls == []
+    assert runtime._mcp_sign_in is None
+
+
+def test_the_session_provider_installs_its_hook_under_its_session_id():
+    from kiro_crew.acp.session_provider import AcpSessionProvider
+
+    runtime = _runtime()
+    handle = AcpSessionHandle("s1", runtime._session_queues["s1"], runtime)
+    provider = AcpSessionProvider(handle, runtime, session_key="dashboard:chat-1")
+    calls: list = []
+    provider.set_mcp_sign_in_ended_hook(calls.append)
+    runtime._mcp_sign_in_ended_hooks["s1"]("remote")
+    assert calls == ["remote"]
+    provider.set_mcp_sign_in_ended_hook(None)
+    assert "s1" not in runtime._mcp_sign_in_ended_hooks
+
+
+def test_the_session_provider_answers_whether_a_sign_in_is_live(monkeypatch):
+    from kiro_crew.acp.session_provider import AcpSessionProvider
+
+    runtime = _runtime()
+    monkeypatch.setattr(type(runtime._harness), "opens_external_urls", property(lambda _s: True))
+    handle = AcpSessionHandle("s1", runtime._session_queues["s1"], runtime)
+    provider = AcpSessionProvider(handle, runtime, session_key="dashboard:chat-1")
+    assert provider.mcp_sign_in_live("remote") is False
+    runtime._mcp_sign_in = ("s1", "remote")
+    assert provider.mcp_sign_in_live("remote") is True
+    assert provider.mcp_sign_in_live("other") is False
+
+
+def test_a_host_without_crew_sign_ins_answers_none(monkeypatch):
+    from kiro_crew.acp.session_provider import AcpSessionProvider
+
+    runtime = _runtime()
+    monkeypatch.setattr(type(runtime._harness), "opens_external_urls", property(lambda _s: False))
+    handle = AcpSessionHandle("s1", runtime._session_queues["s1"], runtime)
+    provider = AcpSessionProvider(handle, runtime, session_key="dashboard:chat-1")
+    assert provider.mcp_sign_in_live("remote") is None
