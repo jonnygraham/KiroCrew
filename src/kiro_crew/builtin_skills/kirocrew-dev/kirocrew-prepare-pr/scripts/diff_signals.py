@@ -193,31 +193,43 @@ def unaccounted_areas(paths, body):
 
 
 # A CommonMark fence: up to three spaces of indent, then three or more backticks
-# or tildes. A backtick fence's info string may not hold a backtick.
-_FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+# or tildes. A backtick fence's info string may not hold a backtick. The fence
+# may follow list markers (``- ~~~``, ``1. ```py``); group 1 is that prefix.
+_FENCE_OPEN = re.compile(r"^((?: {0,3}(?:[-+*]|\d{1,9}[.)]) {1,4})*) {0,3}(`{3,}(?=[^`]*$)|~{3,})")
 
 
 def _strip_fences(text):
     """``text`` with every fenced code block removed, fence lines included.
 
     A block closes on a line of the same character, at least as long as the
-    opener, indented up to three spaces and followed only by blanks. An
-    unclosed block runs to the end, as CommonMark renders it.
+    opener, followed only by blanks and indented like the opener's content: up
+    to three spaces past the list markers it sits behind. A block inside a list
+    item also ends where that item does, at the first non-blank line indented
+    less than the item's content. An unclosed block runs to the end, as
+    CommonMark renders it. A fence in a blockquote is left counted: every line
+    of it starts with ``>``, so none can be read as an opener here.
     """
     kept = []
     close = None
+    width = 0
     for line in text.splitlines():
-        if close is None:
-            m = _FENCE_OPEN.match(line)
-            if m:
-                fence = m.group(1)
-                close = re.compile(
-                    r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$"
-                )
+        if close is not None:
+            if line.strip() and len(line) - len(line.lstrip(" ")) < width:
+                close = None  # the list item ended, so did its fence
+            elif close.match(line):
+                close = None
+                continue
             else:
-                kept.append(line)
-        elif close.match(line):
-            close = None
+                continue
+        m = _FENCE_OPEN.match(line)
+        if m:
+            width = len(m.group(1))
+            fence = m.group(2)
+            close = re.compile(
+                "^ {%d} {0,3}%s{%d,}[ \t]*$" % (width, re.escape(fence[0]), len(fence))
+            )
+        else:
+            kept.append(line)
     return "\n".join(kept)
 
 

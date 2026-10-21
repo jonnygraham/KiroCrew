@@ -332,6 +332,37 @@ def test_four_space_indent_is_not_a_fence_and_unclosed_fence_runs_to_the_end() -
     assert ds.word_count(ds.what_changed_prose(body)) == 1
 
 
+@pytest.mark.parametrize("fence", ["~~~", "```"])
+def test_a_list_item_fence_closes_at_its_own_indent_and_keeps_the_prose_between(
+    fence: str,
+) -> None:
+    # Each item's indented closer ends its own block. Read as a top-level opener
+    # instead, the first closer would hide the paragraph up to the second one.
+    item = "- " + fence + "\n  | in | code |\n  " + fence + "\n"
+    prose = "word " * 30 + "\n"
+    body = "## What changed\n\n" + item + "\n" + prose + "\n" + item + "\n## Tests\n\nt\n"
+    assert ds.what_changed_table_rows(body) == 0
+    assert ds.word_count(ds.what_changed_prose(body)) == 30
+
+
+def test_list_fences_nest_and_end_with_their_item() -> None:
+    # An ordered and a nested item; the closer sits at the item's content indent.
+    body = "## What changed\n\n1. ```py\n   | a |\n   ```\n- - ~~~\n    | b |\n    ~~~\n\nOne.\n"
+    assert ds.what_changed_table_rows(body) == 0
+    assert ds.word_count(ds.what_changed_prose(body)) == 1
+    # An unclosed fence in an item ends at the first line indented less than it.
+    body = "## What changed\n\n- ~~~\n  | a |\n\nTwo words.\n| row |\n"
+    assert ds.what_changed_table_rows(body) == 1
+    assert ds.word_count(ds.what_changed_prose(body)) == 2
+
+
+def test_a_blockquote_fence_is_still_counted() -> None:
+    # Residual, not changed here: ``> ~~~`` is not read as a fence, so its words count.
+    body = "## What changed\n\nShort.\n\n> ~~~\n> | a |\n> ~~~\n"
+    assert ds.what_changed_table_rows(body) == 0  # ``> |`` does not start with ``|``
+    assert ds.word_count(ds.what_changed_prose(body)) == 9  # every token, ``>`` included
+
+
 def test_a_heading_inside_a_fence_still_ends_the_section() -> None:
     # Residual, not changed here: the section is cut at the first ``## `` line
     # before fences are stripped, so a heading inside a fence ends it.
