@@ -3385,9 +3385,10 @@
         "renameFailed": "No se pudo cambiar el nombre de la reunión.",
         "minutesSaveFailed": "No se pudieron guardar tus cambios.",
         "minutesRevertFailed": "No se pudieron descartar tus cambios.",
-        "anotherMeetingActiveNamed": "\"{{title}}\" ya está en marcha. Termínala primero.",
-        "anotherMeetingReviewing": "Cierra la revisión de “{{title}}” para iniciar otra reunión.",
-        "sttStreamingDisabled": "Activa el streaming en la configuración de voz para transcripción en vivo."
+        "anotherMeetingActiveNamed": "«{{title}}» sigue en marcha. Ábrela en Reuniones y elige primero «Terminar y revisar».",
+        "anotherMeetingReviewing": "«{{title}}» sigue en revisión. Ábrela en Reuniones y elige primero «Cerrar la reunión».",
+        "sttStreamingDisabled": "La transcripción en vivo está desactivada. En Ajustes → Voz, comprueba que la entrada de voz esté activada, que el proveedor admita streaming y que Streaming esté activado.",
+        "openVoiceSettings": "Abrir ajustes de voz"
       },
       "settings": {
         "addTerm": "Añadir",

@@ -351,7 +351,7 @@ async def handle_start_meeting(request: web.Request) -> web.Response:
                 )
                 blocking_title = str(blocking_meta.get("title", "")) if blocking_meta else ""
                 blocking_status = str(blocking_meta.get("status", "")) if blocking_meta else ""
-            except Exception:
+            except (OSError, ValueError):
                 blocking_title = ""
                 blocking_status = ""
             return web.json_response(

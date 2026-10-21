@@ -137,7 +137,9 @@ class TestMeetingLifecycleRoutes:
             assert resp.status == 409
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("blocker_status", [k.STATUS_ACTIVE, k.STATUS_PAUSED, k.STATUS_REVIEWING])
+    @pytest.mark.parametrize(
+        "blocker_status", [k.STATUS_ACTIVE, k.STATUS_PAUSED, k.STATUS_REVIEWING]
+    )
     async def test_start_409_names_the_blocking_meeting(self, app, fake_sessions, blocker_status):
         """The 409 body names the blocking meeting and its status.
 

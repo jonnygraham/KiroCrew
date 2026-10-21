@@ -72,7 +72,6 @@ export interface MeetingsConfig {
   translation_language: string
 }
 
-
 /** One translated transcript line. `text` is `''` when the translation failed. */
 export interface TranslationLine {
   n: number

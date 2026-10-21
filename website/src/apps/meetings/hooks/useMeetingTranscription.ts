@@ -38,6 +38,20 @@ export const transcriptionSupported =
 /** The stop frame the STT WebSocket protocol expects (a wire frame, not copy). */
 const STOP_FRAME = JSON.stringify({ type: 'stop' })
 
+/**
+ * Server error codes that a reconnect cannot fix: a setting, a consent or a
+ * package must change first. After one of these the hook halts instead of
+ * reopening the socket (see `halted`). Every other code is retried.
+ */
+const TERMINAL_ERROR_CODES = new Set([
+  'stt_streaming_disabled',
+  'stt_consent_required',
+  'stt_aws_access_denied',
+  'stt_extra_missing',
+  'stt_transcribe_vocabulary_rejected',
+  'stt_transcribe_sdk_outdated',
+])
+
 const MAX_BUFFERED_BYTES = 8 * 32 * 1024
 /** Reconnect when no server frame has arrived for this long while recording. */
 const STALL_TIMEOUT_MS = 20_000
@@ -154,6 +168,14 @@ export function useMeetingTranscription({
    * PCM is flushed once 'ready' arrives — dispatching audio from the paused window.
    */
   const [connecting, setConnecting] = useState(false)
+  /**
+   * True after the server sent a TERMINAL error frame (`TERMINAL_ERROR_CODES`),
+   * until `stop()` runs. While set, `start()` refuses, so a refusal (streaming
+   * disabled, no grant) cannot turn into a reconnect loop, whatever order the
+   * error frame, the socket close and the caller's effect re-run arrive in.
+   */
+  const [halted, setHalted] = useState(false)
+  const haltedRef = useRef(false)
   const wsRef = useRef<WebSocket | null>(null)
   const ctxRef = useRef<AudioContext | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -271,6 +293,7 @@ export function useMeetingTranscription({
       return
     }
     if (wsRef.current) return
+    if (haltedRef.current) return
     // `wsRef` alone is not enough: it is only assigned once the socket is created,
     // and everything before that is awaited (getUserMedia, the AudioWorklet module).
     // Two calls landing in that window both proceed and end up with two microphone
@@ -319,15 +342,11 @@ export function useMeetingTranscription({
         return
       }
       if (msg.type === 'ready') {
-        // Activate only when the server confirms the stream is open — never
-        // while still awaiting. If we set active earlier (after addModule),
-        // a terminal error frame later causes cleanup() to flip active false,
-        // which the session effect reads as a dropped socket and restarts
-        // transcription in a loop. Moving setActive here ensures active is
-        // never true on the error path, so cleanup() is a no-op on the flag
-        // and the session effect never sees the transition.
-        setConnecting(false)
-        setActive(true)
+        // Only opens the gate. `active` is published after the ready gate resolves
+        // in start(), i.e. once BOTH the worklet is set up and the server is
+        // ready. Setting it here could make it true while addModule is still
+        // pending; a failed load would then flip it false in cleanup(), which
+        // the session effect reads as a drop and restarts, in a loop.
         resolveReady()
         return
       }
@@ -371,8 +390,17 @@ export function useMeetingTranscription({
         onErrorRef.current?.(msg.code || msg.message || 'error')
         // Mark as stopping so the onclose handler does not emit a second 'disconnected'
         // error that would overwrite the code-specific message with a generic one.
-        setConnecting(false)
         stoppingRef.current = true
+        if (msg.code && TERMINAL_ERROR_CODES.has(msg.code)) {
+          // Retrying cannot help: stay down until stop() (pause or end).
+          setConnecting(false)
+          haltedRef.current = true
+          setHalted(true)
+        }
+        // Any other code (the 5-minute stream cap, a failed session) is
+        // retryable. `connecting`/`active` are left for cleanup() on the
+        // server's close, so the session effect re-runs only once the old
+        // socket is gone and reopens it, as before this change.
         resolveReady()
       }
     }
@@ -475,7 +503,8 @@ export function useMeetingTranscription({
     // Do not flush if stop() was called while we were waiting (e.g. the meeting
     // was paused during the connect window). stoppingRef was set by stop() or by
     // the error-frame handler — either way the capture should be discarded.
-    if (!stoppingRef.current && ws.readyState === WebSocket.OPEN) {
+    const live = !stoppingRef.current && ws.readyState === WebSocket.OPEN && wsRef.current === ws
+    if (live) {
       for (const chunk of buffer) {
         try { ws.send(chunk) } catch { break }
       }
@@ -483,12 +512,22 @@ export function useMeetingTranscription({
     buffer.length = 0
     bufferedBytes = 0
     ready = true
+    // Active only now: setup succeeded AND the server sent 'ready' (not an
+    // error frame, not a close). So `active` is never true on a path that
+    // ends in cleanup() before the stream was live, and a failure there cannot
+    // look like a dropped socket to the session effect.
+    if (live) {
+      setConnecting(false)
+      setActive(true)
+    }
     // `meetingId` is no longer a direct dependency: the only use left in here is
     // inside `dispatchWithRetry`, which closes over it and is listed instead.
   }, [cleanup, clearWatchdog, dispatchWithRetry])
 
   const stop = useCallback(() => {
     stoppingRef.current = true
+    haltedRef.current = false
+    setHalted(false)
     clearWatchdog()
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -503,5 +542,5 @@ export function useMeetingTranscription({
     }, CLOSE_GRACE_MS)
   }, [cleanup, clearWatchdog])
 
-  return { active, connecting, start, stop, supported: transcriptionSupported }
+  return { active, connecting, halted, start, stop, supported: transcriptionSupported }
 }

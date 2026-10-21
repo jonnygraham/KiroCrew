@@ -757,12 +757,12 @@ describe('the microphone waits for transcript ingress, not just for `active`', (
     // Guards the wiring: the effect must gate BOTH the open and the close branch on
     // the shared rule, so a poll reporting ingress open flips the mic on without a
     // status change and a fast poll observing `active` early cannot race one on.
-    const binding = SessionSource.match(/const mayOpen = canOpenTranscription\(\{[\s\S]*?\n  \}, \[status, ingressReady, transcriptFull, transcriptionActive, transcriptionConnecting\]\)/)
+    const binding = SessionSource.match(/const mayOpen = canOpenTranscription\(\{[\s\S]*?\n  \}, \[status, ingressReady, transcriptFull, transcriptionActive, transcriptionConnecting, transcriptionHalted\]\)/)
     expect(binding, 'status binding no longer gates on canOpenTranscription').not.toBeNull()
-    // open branch: only start when neither active nor connecting
-    expect(binding![0]).toContain('if (mayOpen && !transcriptionRef.current.active && !transcriptionRef.current.connecting)')
-    // close branch: stop when not mayOpen and either active or connecting (pause-window guard)
-    expect(binding![0]).toContain('if (!mayOpen && (transcriptionRef.current.active || transcriptionRef.current.connecting))')
+    // open branch: only start when not active, connecting or halted
+    expect(binding![0]).toContain('if (mayOpen && !t.active && !t.connecting && !t.halted)')
+    // close branch: stop when not mayOpen and active, connecting or halted
+    expect(binding![0]).toContain('if (!mayOpen && (t.active || t.connecting || t.halted))')
   })
 
   it('readiness comes from the POLLED server flag, and unknown reads as not-ready', () => {
@@ -823,13 +823,12 @@ describe('STT error frame is terminal — no reconnect loop', () => {
     // the stop() branch never fires, and buffered PCM is flushed into the notes.
 
     // Hook must export connecting
-    expect(TranscriptionSource).toContain('connecting, start, stop, supported: transcriptionSupported')
+    expect(TranscriptionSource).toContain('connecting, halted, start, stop, supported: transcriptionSupported')
     // connecting is set to true just before await readyPromise
     expect(TranscriptionSource).toContain('setConnecting(true)')
-    // connecting is set to false in cleanup, ready branch, and error branch
-    const readyIdx = TranscriptionSource.indexOf("msg.type === 'ready'")
-    const setConnFalseInReady = TranscriptionSource.indexOf('setConnecting(false)', readyIdx)
-    expect(setConnFalseInReady).toBeGreaterThan(readyIdx)
+    // connecting is cleared once the stream is live, after the ready gate
+    const awaitIdx = TranscriptionSource.indexOf('await readyPromise')
+    expect(TranscriptionSource.indexOf('setConnecting(false)', awaitIdx)).toBeGreaterThan(awaitIdx)
     // Buffer flush is guarded by stoppingRef so stop() during connect discards the PCM
     expect(TranscriptionSource).toContain('!stoppingRef.current && ws.readyState === WebSocket.OPEN')
   })
@@ -841,11 +840,14 @@ describe('STT error frame is terminal — no reconnect loop', () => {
     // Deferring setActive to the 'ready' branch means active is never true on
     // the error path, so cleanup() is a no-op on the state flag and no loop fires.
 
-    // The 'ready' branch must call setActive(true)
+    // setActive(true) runs only after the ready gate, so setup AND 'ready'
+    // both happened; the 'ready' handler itself does not publish it.
     const readyIdx = TranscriptionSource.indexOf("msg.type === 'ready'")
-    const setActiveIdx = TranscriptionSource.indexOf('setActive(true)', readyIdx)
+    const readyBranch = TranscriptionSource.slice(readyIdx, TranscriptionSource.indexOf("msg.type === 'partial'"))
     expect(readyIdx).toBeGreaterThan(0)
-    expect(setActiveIdx).toBeGreaterThan(readyIdx)
+    expect(readyBranch).not.toContain('setActive(true)')
+    const awaitReady = TranscriptionSource.indexOf('await readyPromise')
+    expect(TranscriptionSource.indexOf('setActive(true)', awaitReady)).toBeGreaterThan(awaitReady)
 
     // The code section between 'addModule(' and 'await readyPromise' must NOT
     // contain setActive(true) — that section is the early activation site removed
@@ -888,7 +890,7 @@ describe('connecting stuck-true guard and transcriptionErrorMessage lifecycle', 
     // Start click. Two useEffects implement the contract the state's doc comment
     // already promised: "Cleared when status leaves 'active' or when a new
     // meeting starts."
-    expect(SessionSource).toContain('if (transcriptionActive) setTranscriptionErrorMessage(null)')
-    expect(SessionSource).toContain("if (status !== 'active') setTranscriptionErrorMessage(null)")
+    expect(SessionSource).toContain('if (transcriptionActive) setTranscriptionError(null)')
+    expect(SessionSource).toContain("if (status !== 'active') setTranscriptionError(null)")
   })
 })
