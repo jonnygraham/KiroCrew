@@ -12,7 +12,6 @@
 # where it cannot tell which files those are, it refuses unless --whole-tree asks
 # it to rewrite every row:
 #   python3 scripts/check_file_line_cap.py --update-baseline
-5522 conftest.py
 2666 scripts/docs_lint.py
 9026 src/kiro_crew/acp/runtime.py
 6697 src/kiro_crew/agent.py
@@ -28,7 +27,6 @@
 2818 src/kiro_crew/dashboard/server.py
 2284 src/kiro_crew/sandbox_launcher_program.py
 3181 src/kiro_crew/security_posture.py
-2641 test/conftest.py
 3125 test/test_cron_script.py
 3102 test/test_handlers_memory_coverage.py
 2096 test/test_monitor_directive_apply.py
