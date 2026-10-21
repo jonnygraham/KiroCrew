@@ -147,7 +147,7 @@ sub-agent and MCP App state in [side](side.md), [subagent](subagent.md) and
 ## Return-triggered warm task brief
 
 The owner-only `slot_focused` WebSocket frame also drives the warm task brief.
-Every owner frame naming a crewmate thread is a possible return, including a
+Every owner frame naming a mate thread is a possible return, including a
 re-announce of the same thread and a reconnect re-send. Time away is read from
 the thread's durable history, off the event loop: the time since the later of
 the owner's last genuine (non-injected) user message and the last brief claim

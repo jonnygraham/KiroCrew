@@ -162,6 +162,12 @@ def cancel_warm_task_brief(state: "DashboardState", slot_key: str) -> None:
     if task is not None and task is not current and not task.done() and not model_active:
         task.cancel()
         _skip(slot_key, "cancelled")
+    elif task is not None and task is not current and not task.done():
+        # The model call is not cancelled, but its result must never post:
+        # a later return to the thread cannot revive it.
+        abandoned = getattr(state, "_warm_task_brief_abandoned", None)
+        if isinstance(abandoned, set):
+            abandoned.add(slot_key)
     if isinstance(tasks, dict) and (task is None or task is not current) and not model_active:
         tasks.pop(slot_key, None)
 
@@ -202,9 +208,15 @@ def handle_focus_frame(state: "DashboardState", conn: int, slot_key: object) -> 
     """
     foreground = getattr(state, "_foreground_slots", None)
     previous = foreground.get(conn) if isinstance(foreground, dict) else None
-    # Leaving or replacing the currently displayed thread clears any transient
-    # preparing/unavailable status.
-    if isinstance(previous, str) and previous and slot_key != previous:
+    # The last owner view leaving a thread drops its brief. Another window still
+    # showing the thread keeps the shared brief alive.
+    if (
+        isinstance(previous, str)
+        and previous
+        and slot_key != previous
+        and isinstance(foreground, dict)
+        and not any(key == previous for other, key in foreground.items() if other != conn)
+    ):
         cancel_warm_task_brief(state, previous)
     if not isinstance(slot_key, str) or not slot_key:
         return
@@ -493,7 +505,12 @@ async def _still_current(
     *,
     require_claim: bool = False,
 ) -> TaskSnapshot | None:
-    if not _same_slot(state, slot) or slot.running or not _is_foreground(state, slot.key):
+    if (
+        not _same_slot(state, slot)
+        or slot.running
+        or not _is_foreground(state, slot.key)
+        or slot.key in getattr(state, "_warm_task_brief_abandoned", ())
+    ):
         return None
     current = await _snapshot(state, slot)
     if (
@@ -592,8 +609,13 @@ def _post_message(
 async def _prepare_warm_task_brief(state: "DashboardState", slot: "_ChatSlot") -> None:
     # The working indicator is entered at the opener and left on every exit:
     # result, failure line, stale drop, cancellation or error.
-    with ExitStack() as indicator:
-        await _run_warm_task_brief(state, slot, indicator)
+    try:
+        with ExitStack() as indicator:
+            await _run_warm_task_brief(state, slot, indicator)
+    finally:
+        abandoned = getattr(state, "_warm_task_brief_abandoned", None)
+        if isinstance(abandoned, set):
+            abandoned.discard(slot.key)
 
 
 async def _run_warm_task_brief(

@@ -17,6 +17,7 @@ class _State:
         self._warm_task_brief_not_before: dict[str, float] = {}
         self._warm_task_brief_tasks = {}
         self._warm_task_brief_model_active: set[str] = set()
+        self._warm_task_brief_abandoned: set[str] = set()
         self.frames: list[tuple[str, dict]] = []
         self.preparing_pushes: list[dict[str, bool]] = []
         self.slots = {}
@@ -204,8 +205,11 @@ async def test_message_typed_ten_minutes_ago_gives_no_brief_and_caches(monkeypat
     state, slot, log = _thread(monkeypatch, user_ago=600)
     await _focus(state, 1, slot.key)
     assert _brief_kinds(slot) == []
-    not_before = state._warm_task_brief_not_before[slot.key]
-    assert not_before == pytest.approx(time.time() + 1200, abs=5)
+    typed_at = warm_task_brief._parse_epoch(log.rows[0]["ts"])
+    assert typed_at is not None
+    assert state._warm_task_brief_not_before[slot.key] == (
+        typed_at + warm_task_brief.WARM_TASK_BRIEF_AWAY_SECS
+    )
     reads = log.reads
     await _focus(state, 2, slot.key)
     assert log.reads == reads
@@ -233,6 +237,62 @@ async def test_hidden_and_null_frames_never_start_work(monkeypatch):
     await _focus(state, 1, None)
     assert state._warm_task_brief_tasks == {}
     assert log.reads == 0
+
+
+@pytest.mark.asyncio
+async def test_leave_and_return_during_the_model_call_posts_no_result(monkeypatch):
+    state, slot, _ = _thread(monkeypatch, user_ago=2 * 3600)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run_model(*args, **kwargs):
+        entered.set()
+        await asyncio.wait_for(release.wait(), timeout=30)
+        return '{"message":"Old return."}'
+
+    monkeypatch.setattr(warm_task_brief, "run_bg_oneliner", run_model)
+    warm_task_brief.handle_focus_frame(state, 1, slot.key)
+    slot_retention.note_foreground(state, 1, slot.key)
+    task = state._warm_task_brief_tasks[slot.key]
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=30)
+        # The last window switches away and back without typing.
+        await _focus(state, 1, "thread-y")
+        warm_task_brief.handle_focus_frame(state, 1, slot.key)
+        slot_retention.note_foreground(state, 1, slot.key)
+    finally:
+        release.set()
+    await asyncio.wait_for(task, timeout=30)
+
+    assert _brief_kinds(slot) == ["warm_task_brief_claim", "warm_task_brief_preparing"]
+    assert state._warm_task_brief_abandoned == set()
+
+
+@pytest.mark.asyncio
+async def test_one_window_leaving_keeps_the_other_windows_brief(monkeypatch):
+    state, slot, _ = _thread(monkeypatch, user_ago=2 * 3600)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def run_model(*args, **kwargs):
+        entered.set()
+        await asyncio.wait_for(release.wait(), timeout=30)
+        return '{"message":"Here is where we are."}'
+
+    monkeypatch.setattr(warm_task_brief, "run_bg_oneliner", run_model)
+    slot_retention.note_foreground(state, 2, slot.key)
+    warm_task_brief.handle_focus_frame(state, 1, slot.key)
+    slot_retention.note_foreground(state, 1, slot.key)
+    task = state._warm_task_brief_tasks[slot.key]
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=30)
+        # Window 2 switches away; window 1 still shows the thread.
+        await _focus(state, 2, "thread-y")
+    finally:
+        release.set()
+    await asyncio.wait_for(task, timeout=30)
+
+    assert _brief_kinds(slot) == _FULL_BRIEF
 
 
 def test_not_before_cache_is_bounded(monkeypatch):
