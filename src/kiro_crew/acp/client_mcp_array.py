@@ -308,6 +308,12 @@ def _mirrorless_member_mounts(self: AcpClient, stubbed: Collection[str]) -> list
     backend's permission requests are refused on it. kiro-cli is not in that set,
     reads its spec itself through ``--agent`` and never reaches this record.
     An unreadable spec records False, the same as a mirror that could not parse.
+
+    The same host records the parsed spec too, as ``_session_agent_spec``: the spec
+    this session CONSUMED, which ``confirm_member_projection`` digests against the
+    saved intent. From this parse and no other, so the mounts, the ban and the
+    confirmed spec are one generation. An unreadable spec records ``None``, which
+    the confirmation refuses.
     """
     if (
         self.backend not in ACP_BACKENDS_MEMBER_DISPATCH
@@ -316,6 +322,9 @@ def _mirrorless_member_mounts(self: AcpClient, stubbed: Collection[str]) -> list
     ):
         return []
     records_zero_tools = self.backend in ACP_BACKENDS_SESSION_MCP_ARRAY
+    if records_zero_tools:
+        # Cleared before the read, so a re-resolve that fails keeps no older parse.
+        self._session_agent_spec = None
     try:
         from kiro_crew.acp.session_mcp import session_mcp_projection
 
@@ -334,6 +343,7 @@ def _mirrorless_member_mounts(self: AcpClient, stubbed: Collection[str]) -> list
         return []
     if records_zero_tools:
         self._spec_zero_tools = projection.zero_tools
+        self._session_agent_spec = projection.agent_spec
     if (
         self.backend not in ACP_BACKENDS_MEMBER_DISPATCH
         and self.backend not in ACP_BACKENDS_MEMBER_PANEL
