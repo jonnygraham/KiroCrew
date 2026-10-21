@@ -30,9 +30,16 @@ silently proving a snapshot the caller cannot see.
 
 Portable: stdlib only; shells out to git and pytest via argument lists.
 
+It also prints the one line a ``fix:`` pull request pastes under ``## Tests`` --
+``Proof: PROVEN <tests that fail without the fix> (head <sha12>)``, or ``Proof: not
+provable -- <reason>`` -- and writes ``<git-dir>/prepare-pr-prove.json``, which
+``diff_signals.py --check-body`` compares a ``PROVEN`` line with, for the same tree.
+The named tests are those of the changed test files that fail with the production
+hunks reverted; a control test that passes both ways is not named and stays valid.
+
 Usage:  python3 prove.py [--base <branch>] [--per-hunk]
 Exit:   0 PROVEN | 20 NOT_PROVEN | 21 INCONCLUSIVE | 10 NOTHING_TO_PROVE
-        | 30 BASELINE_RED | 2 environment error
+        | 11 FRONTEND_TESTS | 30 BASELINE_RED | 2 environment error
 """
 
 import argparse
@@ -44,7 +51,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # Emitted into the temp dir and put on PYTHONPATH so pytest reports its own
 # counts.  Reading pytest's report objects is both safer and more precise than
@@ -58,7 +65,7 @@ import os
 
 import pytest
 
-_counts = {"failures": 0, "errors": 0, "tests_run": 0}
+_counts = {"failures": 0, "errors": 0, "tests_run": 0, "failed_ids": []}
 
 # A failure at phase call is only evidence that an assertion observed the bug if
 # the exception WAS an assertion.  Reverting production code can just as easily
@@ -91,6 +98,7 @@ def pytest_runtest_logreport(report):
         if report.outcome == "failed" and not getattr(report, "wasxfail", None):
             if getattr(report, "prove_assertion", False):
                 _counts["failures"] += 1
+                _counts["failed_ids"].append(report.nodeid)
             else:
                 _counts["errors"] += 1
     elif report.failed:
@@ -110,6 +118,7 @@ def pytest_sessionfinish(session):
 
 EXIT_PROVEN = 0
 EXIT_NOTHING_TO_PROVE = 10
+EXIT_FRONTEND_TESTS = 11
 EXIT_NOT_PROVEN = 20
 EXIT_INCONCLUSIVE = 21
 EXIT_BASELINE_RED = 30
@@ -124,6 +133,17 @@ DEFAULT_BASE = "origin/main"
 # files; a run that reaches this bound is reported as an environment fault
 # rather than silently read as a verdict.
 PYTEST_TIMEOUT_SECS = 900
+
+# The record ``diff_signals.py --check-body`` reads, inside the git directory.
+RECORD_FILENAME = "prepare-pr-prove.json"
+
+# Most tests a Proof line names; the record keeps them all.
+MAX_NAMED_TESTS = 5
+
+REASON_FRONTEND = "frontend test (prove.py runs Python only)"
+REASON_TEST_ONLY = "test-only change"
+REASON_DOCS_OR_CONFIG = "docs or config only"
+REASON_TIMED_OUT = "prove.py timed out"
 
 # A hunk header carries the post-image start line, which is what identifies the
 # hunk to a human reading the report.
@@ -179,6 +199,27 @@ def is_doc_path(path: str) -> bool:
     """
     lowered = path.lower()
     return lowered.endswith((".md", ".rst", ".txt")) or lowered.startswith("docs/")
+
+
+_FRONTEND_TEST_RE = re.compile(r"\.(test|spec)\.[cm]?[jt]sx?$")
+_CONFIG_SUFFIXES = (".json", ".yml", ".yaml", ".toml", ".ini", ".cfg")
+
+
+def is_frontend_test_path(path: str) -> bool:
+    """True for a website test file, which pytest cannot run (a vitest runner can)."""
+    p = path.replace(os.sep, "/")
+    return p.startswith("website/") and (
+        _FRONTEND_TEST_RE.search(p) is not None or "/__tests__/" in p
+    )
+
+
+def is_docs_or_config(path: str) -> bool:
+    """True for prose and configuration, which no Python test observes."""
+    return is_doc_path(path) or path.lower().endswith(_CONFIG_SUFFIXES)
+
+
+class ProveTimeout(EnvironmentError):
+    """A pytest run reached ``PYTEST_TIMEOUT_SECS``; still an environment fault (exit 2)."""
 
 
 def classify(paths: list[str]) -> tuple[list[str], list[str]]:
@@ -323,6 +364,82 @@ def read_outcome(report: Path) -> tuple[int, int, int]:
     return int(data["failures"]), int(data["errors"]), int(data["tests_run"])
 
 
+def read_failed_ids(report: Path) -> list[str]:
+    """Node ids of the tests whose assertion failed in the run that wrote *report*."""
+    try:
+        data = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    ids = data.get("failed_ids", [])
+    return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
+
+
+def escape_name(name: str) -> str:
+    """A test id as it is printed in a PR body.
+
+    A parametrized id can carry ``<!--`` (a generated marker), which the body parser
+    reads as an HTML comment and strips. ``&#33;`` is ``!`` to a reader and to
+    ``proof_line_check.py``, which decodes it before comparing with the record.
+    """
+    return name.replace("<!--", "<&#33;--")
+
+
+def proof_line(result: dict, head: str) -> Optional[str]:
+    """The ``Proof:`` line to paste under ``## Tests``, or None when no line is honest.
+
+    NOT_PROVEN, INCONCLUSIVE and BASELINE_RED have none: the author fixes the tests
+    first. An unnamed reason (a change with no test file and code in it) has none
+    either; the author writes ``other: <20+ characters>`` and says why.
+    """
+    if result["verdict"] == "PROVEN":
+        named = result.get("named") or []
+        if not named:
+            return None
+        names = ", ".join(escape_name(n) for n in named[:MAX_NAMED_TESTS])
+        return "Proof: PROVEN {} (head {})".format(names, head[:12])
+    reason = result.get("proof_reason")
+    return "Proof: not provable -- {}".format(reason) if reason else None
+
+
+def pin_commit(repo: Path) -> tuple[str, str]:
+    """(commit id, tree id) of HEAD, resolved once before any test runs.
+
+    A proof takes minutes. If the author commits meanwhile, HEAD moves; the run
+    still judged the commit it started from, so that commit's ids, not HEAD's at
+    the end, go into the printed line and the record.
+    """
+    commit = _git_ok(["rev-parse", "--verify", "HEAD^{commit}"], repo).strip()
+    tree = _git_ok(["rev-parse", "--verify", commit + "^{tree}"], repo).strip()
+    return commit, tree
+
+
+def write_record(
+    repo: Path, result: dict, line: Optional[str], commit: str, tree: str
+) -> Optional[Path]:
+    """Write ``<git-dir>/prepare-pr-prove.json`` for the commit and tree just judged.
+
+    The record names the tree (not only the commit), so a message-only amend keeps
+    it valid and any change of code makes it stale. ``commit`` and ``tree`` are the
+    ids pinned before proving began. Returns the path, or None when git cannot say
+    where its directory is.
+    """
+    gitdir = _git(["rev-parse", "--absolute-git-dir"], repo)
+    if gitdir.returncode != 0:
+        return None
+    record = {
+        "version": 1,
+        "tree": tree,
+        "head": commit,
+        "verdict": result["verdict"],
+        "exit": result["exit"],
+        "tests": result.get("named", []),
+        "line": line,
+    }
+    path = Path(gitdir.stdout.strip()) / RECORD_FILENAME
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 def dirty_among(changed: list[str], repo: Path) -> list[str]:
     """Changed paths that also carry uncommitted edits.
 
@@ -335,31 +452,46 @@ def dirty_among(changed: list[str], repo: Path) -> list[str]:
     return [ln[3:].strip() for ln in out.splitlines() if ln.strip()]
 
 
-def prove(repo: Path, base: str, per_hunk: bool) -> dict:
-    """Run the proof and return a result record; see module docstring for exits."""
+def prove(repo: Path, base: str, per_hunk: bool, commit: str = "HEAD") -> dict:
+    """Run the proof on *commit* and return a result record; see module docstring for exits.
+
+    *commit* is diffed against the merge base and checked out in the throwaway
+    worktree, so a HEAD that moves during the run changes nothing here.
+    """
     # "--" is required: without it a base like "--octopus" is parsed as a git
     # option, merge-base returns HEAD, and the empty diff that follows reports
     # NOTHING_TO_PROVE for a change that has plenty to prove.
-    merge_base = _git_ok(["merge-base", "--", base, "HEAD"], repo).strip()
+    merge_base = _git_ok(["merge-base", "--", base, commit], repo).strip()
     if not merge_base:
         raise EnvironmentError(f"no merge base between {base} and HEAD")
 
     changed = [
-        p for p in _git_ok(["diff", "--name-only", merge_base, "HEAD"], repo).splitlines() if p
+        p for p in _git_ok(["diff", "--name-only", merge_base, commit], repo).splitlines() if p
     ]
     prod, tests = classify(changed)
 
     if not tests:
-        return {
+        if any(is_frontend_test_path(p) for p in changed):
+            return {
+                "verdict": "FRONTEND_TESTS",
+                "exit": EXIT_FRONTEND_TESTS,
+                "reason": "the changed tests are frontend tests; prove.py runs Python only",
+                "proof_reason": REASON_FRONTEND,
+            }
+        result = {
             "verdict": "NOTHING_TO_PROVE",
             "exit": EXIT_NOTHING_TO_PROVE,
             "reason": "the change adds or edits no test file",
         }
+        if changed and all(is_docs_or_config(p) for p in changed):
+            result["proof_reason"] = REASON_DOCS_OR_CONFIG
+        return result
     if not prod:
         return {
             "verdict": "NOTHING_TO_PROVE",
             "exit": EXIT_NOTHING_TO_PROVE,
             "reason": "test-only change: no production hunk to revert",
+            "proof_reason": REASON_TEST_ONLY,
         }
 
     stale = dirty_among(prod + tests, repo)
@@ -369,7 +501,7 @@ def prove(repo: Path, base: str, per_hunk: bool) -> dict:
             + ", ".join(stale)
         )
 
-    patch = _git_ok(["diff", merge_base, "HEAD", "--", *prod], repo)
+    patch = _git_ok(["diff", merge_base, commit, "--", *prod], repo)
     if not patch.strip():
         return {
             "verdict": "NOTHING_TO_PROVE",
@@ -384,13 +516,13 @@ def prove(repo: Path, base: str, per_hunk: bool) -> dict:
     tmp = Path(tempfile.mkdtemp(prefix="kc-prove-"))
     worktree = tmp / "wt"
     try:
-        r = _git(["worktree", "add", "-q", "--detach", str(worktree), "HEAD"], repo)
+        r = _git(["worktree", "add", "-q", "--detach", str(worktree), commit], repo)
         if r.returncode != 0:
             raise EnvironmentError(f"worktree add failed: {r.stderr.strip()}")
 
         baseline = run_pytest(worktree, tests, tmp / "baseline.json")
         if baseline is None:
-            raise EnvironmentError(f"baseline run exceeded {PYTEST_TIMEOUT_SECS}s")
+            raise ProveTimeout(f"baseline run exceeded {PYTEST_TIMEOUT_SECS}s")
         if baseline != 0:
             return {
                 "verdict": "BASELINE_RED",
@@ -400,7 +532,7 @@ def prove(repo: Path, base: str, per_hunk: bool) -> dict:
                 "tests": tests,
             }
 
-        results = []
+        results: list[dict[str, Any]] = []
         for idx, (label, mutation) in enumerate(mutations):
             # Per-hunk only: a documentation hunk is unfalsifiable, so reverting
             # it would always read "uncaught". Bucket it separately instead of
@@ -431,9 +563,10 @@ def prove(repo: Path, base: str, per_hunk: bool) -> dict:
             report = tmp / f"mutated-{idx}.json"
             code = run_pytest(worktree, tests, report)
             if code is None:
-                raise EnvironmentError(f"mutated run exceeded {PYTEST_TIMEOUT_SECS}s")
+                raise ProveTimeout(f"mutated run exceeded {PYTEST_TIMEOUT_SECS}s")
 
             failures, errors, total = read_outcome(report)
+            failed = read_failed_ids(report)
             if failures:
                 outcome = "caught"
             elif errors:
@@ -447,6 +580,7 @@ def prove(repo: Path, base: str, per_hunk: bool) -> dict:
                     "failures": failures,
                     "errors": errors,
                     "tests_run": total,
+                    "failed": failed,
                 }
             )
 
@@ -478,11 +612,17 @@ def prove(repo: Path, base: str, per_hunk: bool) -> dict:
         else:
             verdict, code = "PROVEN", EXIT_PROVEN
             reason = "an assertion failed with the bug reintroduced"
+        named: list[str] = []
+        for row in results:
+            for test_id in row.get("failed", []):
+                if test_id not in named:
+                    named.append(test_id)
         return {
             "verdict": verdict,
             "exit": code,
             "reason": reason,
             "tests": tests,
+            "named": named,
             "results": results,
         }
     finally:
@@ -513,7 +653,16 @@ def main() -> int:
     repo = Path(repo_root.stdout.strip())
 
     try:
-        result = prove(repo, args.base, args.per_hunk)
+        commit, tree = pin_commit(repo)
+        result = prove(repo, args.base, args.per_hunk, commit)
+    except ProveTimeout as exc:
+        print(f"prove: {exc}", file=sys.stderr)
+        result = {
+            "verdict": "TIMED_OUT",
+            "exit": EXIT_ENV,
+            "reason": str(exc),
+            "proof_reason": REASON_TIMED_OUT,
+        }
     except EnvironmentError as exc:
         print(f"prove: {exc}", file=sys.stderr)
         return EXIT_ENV
@@ -522,6 +671,10 @@ def main() -> int:
     for row in result.get("results", []):
         if row["outcome"] != "caught":
             print(f"  {row['outcome']}: {row['hunk']}")
+    line = proof_line(result, commit)
+    write_record(repo, result, line, commit, tree)
+    if line:
+        print(line)
     return int(result["exit"])
 
 

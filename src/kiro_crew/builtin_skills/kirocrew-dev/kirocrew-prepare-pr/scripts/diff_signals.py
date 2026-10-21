@@ -34,8 +34,17 @@ With ``--check-body`` it also reads the PR body the skill writes --
   the checkout, so a branch cannot weaken its own check, and run on the body.
   A failure prints that script's message; that is exit 22. A base without the
   script (another repo) skips it silently.
+* **Proof line (advisory until CI enforces it).** On a ``fix`` title (the branch's first
+  commit subject) the body's ``Proof:`` line must sit inside ``## Tests``.
+  ``.github/scripts/proof_line_check.py``, also read from ``origin/<base>``, judges it, and
+  compares a ``PROVEN`` line with ``<git-dir>/prepare-pr-prove.json`` -- the record
+  ``prove.py`` writes -- for the same tree, so a stale or invented line fails here though CI
+  cannot see the record. While CI's step is in warn mode the findings print and the exit
+  stays 0; once the script turns red for this pull request the same findings are exit 24.
+  A base without the script skips it.
 
-All checks run and print before any exit; when several breach, the lowest code wins.
+All checks run and print before any exit; the first non-zero code in the order
+accounting/length (20, 21), template (22), proof line (24) is the exit code.
 
 Size and age signals are printed, never an exit code. ``! SIZE`` appears at
 ``SIZE_HINT_FILES`` changed files and says more at ``SIZE_STOP_FILES``, where CI's
@@ -46,7 +55,8 @@ the machine.
 
 Usage:  python3 diff_signals.py [base-branch] [--check-body] [--age]
 Exit:   0 printed / body passes | 20 unaccounted area(s) | 21 What changed too long |
-        22 template sections missing | 2 environment error
+        22 template sections missing | 24 Proof line missing, malformed or stale (when
+        enforced) | 2 environment error
 """
 
 import argparse
@@ -98,6 +108,11 @@ BODY_FILENAME = "prepare-pr-body.md"
 
 # CI's template check, read from origin/<base> by --check-body.
 TEMPLATE_CHECK = ".github/scripts/pr-description-check.sh"
+
+# CI's Proof line check, read from origin/<base> by --check-body, and the record
+# prove.py writes for it to compare against (inside the git directory).
+PROOF_CHECK = ".github/scripts/proof_line_check.py"
+PROVE_RECORD = "prepare-pr-prove.json"
 
 # Bare file names that appear in many places at once; naming one of these does
 # not tell the reader WHICH one changed, so it never satisfies the accounting.
@@ -395,6 +410,58 @@ def template_check(body, base):
     return 22
 
 
+def proof_check(body, base, gitdir):
+    """Run the base ref's ``PROOF_CHECK`` on ``body``; return 0 or 24.
+
+    The script prints its findings and exits 1 only when it is enforcing, so a
+    warn-mode finding is shown here and never stops the loop. Absent on the base
+    (another repo, or before the check landed) is a silent skip.
+    """
+    rc, script, _ = run(["git", "show", "origin/{}:{}".format(base, PROOF_CHECK)])
+    if rc != 0:
+        return 0
+    # The pull request title is the squash message of a one-commit branch; with the
+    # permitted second (mechanical) commit it is still the first commit's subject.
+    subjects = run(["git", "log", "--reverse", "--format=%s", "origin/{}..HEAD".format(base)])[1]
+    title = subjects.splitlines()[0].strip() if subjects.strip() else ""
+    tree = run(["git", "rev-parse", "HEAD^{tree}"])[1].strip()
+    if not (title and tree):
+        print("WARN: cannot resolve HEAD - proof line check skipped")
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        script_path = os.path.join(tmp, "proof_line_check.py")
+        with open(script_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(script)
+        env = dict(
+            os.environ,
+            PR_TITLE=title,
+            PR_BODY=body,
+            TREE_ID=tree,
+            PROVE_RECORD=os.path.join(gitdir, PROVE_RECORD),
+        )
+        env.pop("GITHUB_ACTIONS", None)  # plain lines here, not workflow annotations
+        env.pop("PR_CREATED_AT", None)
+        try:
+            p = subprocess.run(
+                [sys.executable, script_path],
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as exc:
+            print("WARN: cannot run {} ({}) - proof line check skipped".format(PROOF_CHECK, exc))
+            return 0
+    for line in p.stdout.splitlines():
+        print(line)
+    if p.returncode == 1:
+        return 24
+    if p.returncode != 0:
+        print("WARN: {} could not run ({}) - skipped".format(PROOF_CHECK, p.stderr.strip()))
+    return 0
+
+
 def parse_args(argv):
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("base", nargs="?", default="")
@@ -478,7 +545,8 @@ def main(argv):
     if body is not None:
         rc = check_body(body, ns)
         tpl = template_check(body, base)
-        return rc or tpl
+        proof = proof_check(body, base, gitdir)
+        return rc or tpl or proof
     return 0
 
 
