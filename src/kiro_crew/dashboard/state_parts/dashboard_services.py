@@ -488,13 +488,20 @@ def clear_question_pending(
     reason: str | None = None,
 ) -> bool:
     """Retire only question records matching both supplied filters."""
-    return _questions_for(self).clear_pending(
+    cleared = _questions_for(self).clear_pending(
         self,
         slot_key,
         blocking=blocking,
         card_id=card_id,
         reason=reason,
     )
+    if cleared:
+        # A crewmate page's waiting fold is fed on log growth, and retiring a
+        # question writes no log entry: tell the feed directly.
+        from kiro_crew.dashboard import crewmate_feed
+
+        crewmate_feed.question_retired(slot_key)
+    return cleared
 
 
 def _broadcast_question_retired(
