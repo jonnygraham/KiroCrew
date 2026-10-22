@@ -25,7 +25,7 @@ vi.mock('../../components/crew/CrewMonitoredAvatar', () => ({
   ),
 }))
 
-import { useContext } from 'react'
+import { useContext, useState } from 'react'
 import { createPortal } from 'react-dom'
 import CrewProfilePanel, { PROFILE_TABS, ProfilePagePushContext } from './CrewProfilePanel'
 
@@ -542,6 +542,50 @@ describe('CrewProfilePanel tab pages', () => {
       </>
     )
   }
+
+  /** A tab whose opener leaves while its page is open: the page's own pick
+   *  folds the row that opened it (a settings row clearing a stale level). */
+  function FoldingStub() {
+    const push = useContext(ProfilePagePushContext)
+    const [row, setRow] = useState(true)
+    return (
+      <>
+        {row && <button type="button" onClick={() => push?.open('Effort', () => {})}>open page</button>}
+        {push?.host ? createPortal(
+          <button type="button" data-testid="stub-pick" onClick={() => { setRow(false); push.close() }}>clear</button>,
+          push.host,
+        ) : null}
+      </>
+    )
+  }
+
+  it('lands focus on the card itself when a page pops and its opener is gone, so Escape still closes', async () => {
+    const h = setup({ initialTab: 'goals', goalsBody: <FoldingStub /> })
+    const opener = screen.getByRole('button', { name: 'open page' })
+    opener.focus()
+    fireEvent.click(opener)
+    const pick = await screen.findByTestId('stub-pick')
+    pick.focus()
+    fireEvent.click(pick)
+    await waitFor(() => expect(screen.queryByTestId('crew-profile-pushed-title')).toBeNull())
+    // The opener unmounted, so focus cannot go back to it; the body would take
+    // it, outside the card. The card takes it instead.
+    expect(screen.queryByRole('button', { name: 'open page' })).toBeNull()
+    expect(document.activeElement).toBe(screen.getByTestId('crew-profile-panel'))
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+    expect(h.onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('opening the card never pulls focus onto it', () => {
+    // The fallback above runs only after a pop; a freshly opened card leaves
+    // focus where it was (the composer, usually).
+    const before = document.createElement('button')
+    document.body.appendChild(before)
+    before.focus()
+    setup()
+    expect(document.activeElement).toBe(before)
+    before.remove()
+  })
 
   it('pushes a tab page over the card with its title, and back hands it back to the tab', async () => {
     const onPop = vi.fn()

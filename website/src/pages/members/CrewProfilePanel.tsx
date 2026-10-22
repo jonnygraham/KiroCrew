@@ -1,4 +1,4 @@
-import { createContext, forwardRef, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode, type Ref, type ForwardedRef } from 'react'
+import { createContext, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode, type Ref } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { AlarmClock, Brain, ChevronLeft, ChevronRight, FolderOpen, Goal, IdCard, NotebookPen, Pencil, RotateCcw, Route, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -13,8 +13,7 @@ import CrewScheduleList from './CrewScheduleList'
 import { cn } from '../../lib/utils'
 import { Btn } from '../../components/ui'
 import ErrorNotice from '../../components/ErrorNotice'
-import { forwardUiLocation } from '../../uiLocations/uiLocation'
-import type { UiLocationId } from '../../uiLocations/descriptors'
+import { Row, TONE } from './profileRow'
 
 /** The card's four tabs, in strip order (crewmate-panel IA sketch). */
 export const PROFILE_TABS = ['sessions', 'schedule', 'goals', 'profile'] as const
@@ -90,8 +89,10 @@ export interface CrewProfilePanelProps {
   /** The Goals tab: the goals, the milestones, the check-in switches
    *  and the reports (CrewGoalsPane). */
   goalsBody?: ReactNode
-  /** The crewmate's permission, model and effort controls (CrewProfileSettings).
-   *  They are set here, never in the chat composer. */
+  /** The crewmate's own settings group (CrewProfileSettings): permission, model,
+   *  effort, the worker pair and the dashboard lock. They are set here, never in
+   *  the chat composer. Its pickers are pages it pushes over the card through
+   *  `ProfilePagePushContext`, like the Goals tab's pages. */
   settingsBody?: ReactNode
   onClose: () => void
   /** Runs a pushed-page back action through the host's draft guard. */
@@ -102,41 +103,6 @@ export interface CrewProfilePanelProps {
    *  thread. Absent while the thread is unbound or a reset runs. */
   onFreshStart?: () => void
 }
-
-const TONE: Record<'accent' | 'ok' | 'warn' | 'info', string> = {
-  accent: 'bg-accent-subtle text-accent',
-  ok: 'bg-ok-subtle text-ok-text',
-  warn: 'bg-warn-subtle text-warn-text',
-  info: 'bg-info-subtle text-info-text',
-}
-
-const Row = forwardRef(function Row({ icon, tone = 'accent', label, sub, onClick, testId, 'data-ui-location': uiLocationId }: {
-  icon: ReactNode
-  tone?: keyof typeof TONE
-  label: string
-  sub?: string
-  onClick: () => void
-  testId: string
-  /** A registered find_ui location (`{...uiLocation(id)}` spread on the row). */
-  'data-ui-location'?: UiLocationId
-}, forwardedRef: ForwardedRef<HTMLButtonElement>) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-center gap-3 w-full px-3.5 py-3 text-left border-t border-border first:border-t-0 hover:bg-bg-hover transition-colors cursor-pointer"
-      data-testid={testId}
-      {...forwardUiLocation(uiLocationId, forwardedRef)}
-    >
-      <span className={cn('w-8 h-8 rounded-[9px] grid place-items-center shrink-0', TONE[tone])} aria-hidden="true">{icon}</span>
-      <span className="flex-1 min-w-0 leading-tight">
-        <span className="block text-[13px] font-semibold truncate">{label}</span>
-        {sub && <span className="block text-[12px] text-muted truncate">{sub}</span>}
-      </span>
-      <ChevronRight size={15} className="text-muted shrink-0" aria-hidden="true" />
-    </button>
-  )
-})
 
 function Tile({ icon, tone, label, value, title, onClick, testId }: {
   icon: ReactNode
@@ -233,6 +199,11 @@ export default function CrewProfilePanel(p: CrewProfilePanelProps) {
   // opener onto the body — outside the card, where Escape above cannot see it.
   // Land it on the back control instead (the New schedule page focuses its own
   // form), and hand it back to the opener when the page pops.
+  // An opener that unmounted while its page was open (a settings row that
+  // folded on the pick made from its own page) cannot take focus back; the card
+  // itself does instead, so Escape still closes it. Only after a pop: the card
+  // opening must never pull focus off the composer.
+  const hadPage = useRef(false)
   useEffect(() => {
     if (pushed === 'about' || pushed === 'notes' || pushed === 'tab-page') {
       backRef.current?.focus({ preventScroll: true })
@@ -240,7 +211,9 @@ export default function CrewProfilePanel(p: CrewProfilePanelProps) {
       const opener = openerRef.current
       openerRef.current = null
       if (opener?.isConnected) opener.focus({ preventScroll: true })
+      else if (hadPage.current) rootRef.current?.focus({ preventScroll: true })
     }
+    if (pushed) hadPage.current = true
   }, [pushed])
 
   // Strip order = PROFILE_TABS: the work first (what the crewmate is doing,
@@ -297,6 +270,8 @@ export default function CrewProfilePanel(p: CrewProfilePanelProps) {
       data-testid="crew-profile-panel"
       data-tab={tab}
       ref={rootRef}
+      // Programmatic focus target only (the pop fallback above); not in the tab order.
+      tabIndex={-1}
       role="region"
       aria-label={t('pages.membersPage.profile_card')}
     >
@@ -466,7 +441,7 @@ export default function CrewProfilePanel(p: CrewProfilePanelProps) {
                   <Row icon={<NotebookPen size={16} />} tone="warn" label={t('pages.membersPage.notes_tab')} sub={t('pages.membersPage.profile_notes_sub')} onClick={() => push('notes')} testId="crew-profile-notes" />
                 </div>
 
-                {p.settingsBody}
+                <ProfilePagePushContext.Provider value={pagePush}>{p.settingsBody}</ProfilePagePushContext.Provider>
               </div>
             )}
             {tab === 'schedule' && (

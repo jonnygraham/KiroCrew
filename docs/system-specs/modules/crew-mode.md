@@ -1871,8 +1871,31 @@ the opener always stays. The panel chord toggles only while a mate is
 open.
 
 The Profile tab holds the mate's own settings (`CrewProfileSettings`):
-permission (Normal / Reads / Trust), model and effort. They are changed there,
-never in the chat. Each pick writes the crew record (`approval_mode`, `model`,
+permission (Normal / Reads / Trust), model and effort, the worker pair and the
+dashboard lock. They are changed there, never in the chat. The settings are one
+iOS-style group of rows under the Notes row (`profileRow.tsx`: `Row`,
+`RowStatic`, `RowGroup`), never a form on the card: each picker row reads its
+current value, muted, before a chevron, and tapping it pushes a single-choice
+page over the card — the card's own push (`ProfilePagePushContext`, the
+mechanism the Goals tab's pages use), titled with the row's label, one option
+per row with the option's one-line description under it (the permission modes)
+or the pick's resolved value and trade-off as a caption under the list (the
+model and effort pages), and a check mark on the stored value. A pick saves on
+the spot and the page stays open with the check moved and any notice shown,
+until the person goes back — a refused permission (409) or a failed write would
+otherwise pop out of sight. While a save runs the options are held with
+`aria-disabled`, never `disabled`: the pick is made from the focused option, and
+disabling it would drop focus onto the body, outside the card's Escape handler.
+A row that folds while its page is open (the effort rows follow whether the
+model reasons, so clearing a stale level from its own page folds its row) pops
+its page; the last rendered page keeps painting, held, through the exit slide,
+and since the opener is gone the card lands focus on itself (`tabIndex=-1`, only
+after a pop, never on open) so Escape still closes it. The lock, a boolean, stays
+a switch in the same group, its one line of help as the group's caption. The
+Permissions row carries the `members.permissions` find_ui location (its
+accessible name is the label alone; the value is its description) and sits with
+its page in a `GuideTrustRootRegion`, so no guide points at it by id or by name.
+Each pick writes the crew record (`approval_mode`, `model`,
 `reasoning_effort` on `PUT /api/agents/{name}`) and then the live DM slot, so
 the open thread follows at once. `approval_mode` is `""` until the user picks one, and while it is `""` the
 thread opens in `trust` (`_seed_member_approval` seeds the slot from `mode or
