@@ -348,11 +348,11 @@ describe('MembersPage Profile card Schedules tab', () => {
     await waitFor(() => expect(navigateSpy).toHaveBeenCalledWith('/schedule'))
   })
 
-  it('reopens Sessions when its quiet-chat link is used again from another card tab', async () => {
+  it('reopens Workers when its quiet-chat link is used again from another card tab', async () => {
     await openCrewmate()
     fireEvent.click(screen.getByRole('button', { name: 'Open quiet sessions' }))
     const firstCard = await screen.findByTestId('crew-profile-panel')
-    expect(within(firstCard).getByRole('tab', { name: 'Sessions' })).toHaveAttribute('aria-selected', 'true')
+    expect(within(firstCard).getByRole('tab', { name: 'Workers' })).toHaveAttribute('aria-selected', 'true')
 
     fireEvent.click(within(firstCard).getByRole('tab', { name: 'Profile' }))
     expect(within(firstCard).getByRole('tab', { name: 'Profile' })).toHaveAttribute('aria-selected', 'true')
@@ -361,7 +361,7 @@ describe('MembersPage Profile card Schedules tab', () => {
     await waitFor(() => {
       const reopened = screen.getByTestId('crew-profile-panel')
       expect(reopened).not.toBe(firstCard)
-      expect(within(reopened).getByRole('tab', { name: 'Sessions' })).toHaveAttribute('aria-selected', 'true')
+      expect(within(reopened).getByRole('tab', { name: 'Workers' })).toHaveAttribute('aria-selected', 'true')
     })
   })
 })
@@ -495,13 +495,13 @@ describe('MembersPage Profile card — unsaved schedule draft', () => {
   it('the identity pill closes an open card through the same question instead of remounting it over a draft', async () => {
     // The pill is `aria-expanded` and a press on it while the card is open is a
     // CLOSE. Re-opening set the card's tab back to Profile, and the tab is part of
-    // its React key, so a card opened on another tab (the quiet-chat Sessions link)
+    // its React key, so a card opened on another tab (the quiet-chat Workers link)
     // was remounted by that press and the draft inside it destroyed unasked. Pointer
     // users rarely reach the pill under the floating card's scrim; keyboard users do.
     await openCrewmate()
     fireEvent.click(screen.getByRole('button', { name: 'Open quiet sessions' }))
     const card = await screen.findByTestId('crew-profile-panel')
-    expect(screen.getByRole('tab', { name: 'Sessions' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Workers' })).toHaveAttribute('aria-selected', 'true')
     fireEvent.click(within(card).getByRole('tab', { name: 'Schedules' }))
     await screen.findByTestId('crew-schedule-list')
     await openCreateForm()
@@ -589,7 +589,7 @@ describe('MembersPage Profile card — unsaved schedule draft', () => {
     expect(screen.getByDisplayValue('Check the board')).toBeInTheDocument()
   })
 
-  it('asks before the quiet-chat Sessions link replaces a pushed schedule draft', async () => {
+  it('asks before the quiet-chat Workers link replaces a pushed schedule draft', async () => {
     await openDraft()
     fireEvent.click(screen.getByRole('button', { name: 'Open quiet sessions' }))
     await answer('Cancel')
@@ -599,7 +599,7 @@ describe('MembersPage Profile card — unsaved schedule draft', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open quiet sessions' }))
     await answer('Discard')
     await waitFor(() => expect(screen.queryByDisplayValue('Check the board')).toBeNull())
-    expect(screen.getByRole('tab', { name: 'Sessions' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Workers' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('asks before a driving-session row leaves for the chat page over a draft', async () => {
@@ -855,7 +855,7 @@ describe('MembersPage Profile card — Goals retention and delivery', () => {
       () => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })),
       // The pushed page covers the rail, but the tab exit must also guard a
       // programmatic selection rather than unmounting the Goals body.
-      () => fireEvent.click(screen.getByRole('tab', { name: 'Sessions', hidden: true })),
+      () => fireEvent.click(screen.getByRole('tab', { name: 'Workers', hidden: true })),
       () => fireEvent.click(screen.getByTestId('member-back')),
       () => fireEvent.click(screen.getByRole('button', { name: 'Open quiet sessions' })),
     ]
@@ -929,7 +929,7 @@ describe('MembersPage Profile card — Goals retention and delivery', () => {
     expect(holdsDocument()).toBe(true)
     fireEvent.click(screen.getByTestId('crew-profile-close'))
     fireEvent.click(screen.getByTestId('crew-profile-back'))
-    fireEvent.click(screen.getByRole('tab', { name: 'Sessions', hidden: true }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Workers', hidden: true }))
     expect(askToLeave()).toBe('false')
     expect(screen.getByTestId('crew-profile-panel')).toHaveAttribute('data-tab', 'goals')
     expect(screen.queryByRole('dialog')).toBeNull()

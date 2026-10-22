@@ -91,7 +91,7 @@ function setup(overrides: Partial<Parameters<typeof CrewProfilePanel>[0]> = {}):
       notesBody={<div data-testid="host-notes">host notes</div>}
       goalsBody={<div data-testid="host-goals">host goals</div>}
       // Most cases read the Profile tab's body; the card's own default is the
-      // strip's first tab (Sessions), which the rail cases assert explicitly.
+      // strip's first tab (Workers), which the rail cases assert explicitly.
       initialTab="profile"
       {...h}
       {...overrides}
@@ -120,18 +120,18 @@ describe('CrewProfilePanel rail (Tablist labels="active")', () => {
     setup()
     const rail = screen.getByRole('tablist', { name: 'Profile' })
     expect(within(rail).getAllByRole('tab').map((t) => t.getAttribute('title')))
-      .toEqual(['Sessions', 'Schedules', 'Goals', 'Profile'])
+      .toEqual(['Workers', 'Schedules', 'Goals', 'Profile'])
     expect(PROFILE_TABS).toEqual(['sessions', 'schedule', 'goals', 'profile'])
-    for (const name of ['Profile', 'Schedules', 'Sessions', 'Goals']) {
+    for (const name of ['Profile', 'Schedules', 'Workers', 'Goals']) {
       expect(tab(name)).toBeInTheDocument()
     }
   })
 
   it('shows the word on the SELECTED tab only; the others are icon-only with a hidden name', () => {
     setup({ initialTab: undefined })
-    // Opens on the first tab of the strip: Sessions.
-    expect(tab('Sessions')).toHaveAttribute('aria-selected', 'true')
-    expect(visibleLabel(tab('Sessions'))).toBe('Sessions')
+    // Opens on the first tab of the strip: Workers.
+    expect(tab('Workers')).toHaveAttribute('aria-selected', 'true')
+    expect(visibleLabel(tab('Workers'))).toBe('Workers')
     for (const name of ['Schedules', 'Goals', 'Profile']) {
       expect(visibleLabel(tab(name))).toBe('')
       // Still named: the label rides an sr-only span, and the tooltip carries it too.
@@ -141,7 +141,7 @@ describe('CrewProfilePanel rail (Tablist labels="active")', () => {
     // The word travels with the selection.
     fireEvent.click(tab('Goals'))
     expect(visibleLabel(tab('Goals'))).toBe('Goals')
-    expect(visibleLabel(tab('Sessions'))).toBe('')
+    expect(visibleLabel(tab('Workers'))).toBe('')
     expect(screen.getByTestId('crew-profile-panel')).toHaveAttribute('data-tab', 'goals')
   })
 
@@ -451,9 +451,9 @@ describe('CrewProfilePanel Schedules tab', () => {
 })
 
 describe('CrewProfilePanel other tabs', () => {
-  it('Sessions shows the host\'s driving list; Goals shows the host\'s goals; there is no Computer tab', () => {
+  it('Workers shows the host\'s driving list; Goals shows the host\'s goals; there is no Computer tab', () => {
     setup()
-    fireEvent.click(tab('Sessions'))
+    fireEvent.click(tab('Workers'))
     expect(screen.getByTestId('host-sessions')).toBeInTheDocument()
     fireEvent.click(tab('Goals'))
     expect(screen.getByTestId('host-goals')).toBeInTheDocument()

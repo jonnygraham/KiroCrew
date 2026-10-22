@@ -1948,8 +1948,8 @@ name + requested tab + accepted-open nonce).
 
 Profile uses the shared `Tablist` component with `labels="active"`: all four tabs
 carry Lucide icons and accessible labels, while only the selected tab paints its
-word. The tabs are, in strip order, **Sessions**, **Schedules**, **Goals**, and
-**Profile** (the work first, the identity card last). The card opens on Sessions
+word. The tabs are, in strip order, **Workers**, **Schedules**, **Goals**, and
+**Profile** (the work first, the identity card last). The card opens on Workers
 unless the opener names a tab (`openProfile(tab)`; today only the quiet-chat link
 calls it, and it asks for Sessions too). No
 tab carries a count, and there is no placeholder tab for a view that does not
@@ -1963,7 +1963,7 @@ exists. The read-only Monitor section follows About. Every avatar and Profile su
 Memory and
 Workspace sit side by side, but Memory is a flat readout — a solid `border-border`
 hairline, transparent background, no hover and no pointer; never dashed, which is
-this card's empty language (Sessions empty) and would make a
+this card's empty language (Workers empty) and would make a
 set binding read as not set up — while Workspace keeps the filled clickable-card
 treatment with its hover. Notes, Permissions, and Model follow.
 The pencil, Permissions, and Model entries open `CrewEditorModal`;
@@ -2058,13 +2058,24 @@ Chat remains a dynamic tab, and **Ask about this** keeps its synchronous
 contract: it focuses Side Chat and returns true while the Profile draft remains
 mounted.
 
-**Sessions** lists only live dashboard sessions whose `created_by` is the
-mate's DM slot. Rows use the shared status precedence (approval, question,
+**Workers** (key `sessions`; the catalog key is still `profile_sessions_tab`)
+lists only live dashboard sessions whose `created_by` is the
+mate's DM slot. Its word is the reader's, never the mechanism's: a
+first-time user has no model for why a mate would "drive sessions", so
+neither the tab nor anything inside it says session, chat or driving. The
+empty box (`crew-profile-sessions-empty`, the testid keeps the internal noun)
+explains the mechanism in those words — a lead naming the mate ("When a
+big job comes in, {{name}} brings in a few workers to share it.") and one
+line saying the list fills here and is empty now — under an illustration
+built only from the brand mascot assets (`ghost-poses` pose-7 as the
+mate, an accent `ArrowRight`, pose-4 and pose-6 at 30% opacity as the
+workers not here yet). The poses are fixed-palette `<img>` assets, so the fade
+is an opacity, never a recolour, and reads on both palettes (#23003). Rows use the shared status precedence (approval, question,
 running, idle), link to that session through the page's guarded session exit,
 preserve stable ordering while the set is unchanged, and fold after five rows.
 Child subagent runs remain presence for the roster but are not dashboard
 sessions. Every page-level request to open Profile — including a second use of
-the quiet-chat Sessions link after the reader changed card tabs or pushed a
+the quiet-chat Workers link after the reader changed card tabs or pushed a
 page — advances the Profile open nonce and remounts the card at the requested
 initial tab. The nonce advances only inside the action admitted by the schedule
 draft guard, so a veto neither remounts the card nor loses its pushed form.
@@ -2791,9 +2802,9 @@ card's counters already show the return). Runtime `notice` rows and
 compaction status cards are hidden rather than removed from history. When the
 filter leaves NOTHING to draw although the transcript is not empty (a patroller
 that has never spoken), the pane's empty hint is the mate's — "<name> hasn't
-said anything to you yet." plus a verb-first second line pointing at where its visible work is ("See the sessions it is driving."). That second
+said anything to you yet." plus a verb-first second line pointing at where its visible work is ("See what it is working on." — neutral about whether any worker exists yet, since the tab it opens may be the empty box, and never "sessions"). That second
 line is a link when the host passes `onOpenCrewWorkLog` (the Members page does:
-it opens Profile on Sessions), plain text otherwise — words that read as a
+it opens Profile on Workers), plain text otherwise — words that read as a
 destination must be one. Never the fresh-thread "Session ready" line, which
 would read as lost history beside a panel counting its wakes; and the drawer's
 Recent activity counts the member's *runs* (`activity_chat_count`: one entry per

@@ -171,7 +171,8 @@ function Tile({ icon, tone, label, value, title, onClick, testId }: {
  * the selected tab's word. Profile is a summary with doors (edit, description,
  * memory, workspace, notes) plus the crewmate's own settings (permission,
  * model, effort); Schedules is a readable list of
- * what wakes it; Sessions is the sessions it is driving; Goals is the goal
+ * what wakes it; Workers is the sessions it is driving (its tab word is the
+ * user's, "workers", never "sessions"); Goals is the goal
  * record the user and the crewmate share (CrewGoalsPane).
  *
  * It is a floating card over the right of the thread — a hover card, not a
