@@ -91,9 +91,15 @@ export const THEME_VAR_NAMES = [
 // than as a call home" -- so a dashboard document permitting those origins
 // contradicted the frame's own contract. A page draws its chart from the inline
 // script it ships, which stays permitted.
-const cspFor = (scriptOrigin: string, offlineScripts = false): string =>
+//
+// `scriptNonce` replaces 'unsafe-inline' with that nonce, so only a script the HOST
+// built runs: page-authored <script>, inline handlers and javascript: URLs are all
+// refused by the browser. A crewmate's report sets it (`pageScripts: false`): the
+// page is a static snapshot by contract, and a page script could navigate its own
+// frame to a host the crewmate's egress rules forbid.
+const cspFor = (scriptOrigin: string, offlineScripts = false, scriptNonce = ''): string =>
   "default-src 'none'; " +
-  `script-src 'unsafe-inline' ${scriptOrigin}${TAILWIND_RUNTIME_PATH}` +
+  `script-src ${scriptNonce ? `'nonce-${scriptNonce}'` : "'unsafe-inline'"} ${scriptOrigin}${TAILWIND_RUNTIME_PATH}` +
   (offlineScripts ? '; ' : ' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; ') +
   "style-src 'unsafe-inline'; " +
   "img-src data: blob:; font-src data:; connect-src 'none'; " +
@@ -598,6 +604,50 @@ const FRAME_TOUCH_RELAY_BODY = `(function(){
   window.addEventListener('touchcancel',function(e){if(on){on=false;send('cancel',e);}},opts);
 })();`
 
+/** A static page's links do nothing when clicked. Installed (with the nonce) ahead
+ * of the page, as capture-phase listeners on the window that the page has no
+ * script to undo, so a click cannot navigate the frame to a host carrying the
+ * page's text. EVERY click and auxclick loses its default action, without asking
+ * what was clicked: a link inside a shadow root is retargeted to its host (and a
+ * closed root hides it from `composedPath`), and an SVG animation can change the
+ * href a click follows. A static page has no other default action to lose; the
+ * comment bridge listens for the events and does not need their defaults. */
+const STATIC_LINK_GUARD_BODY = `(function(){function stop(e){e.preventDefault();}` +
+  `window.addEventListener('click',stop,true);window.addEventListener('auxclick',stop,true);})();`
+
+/** Page markup that leaves the frame with no script and no click: a refresh
+ * `meta`, a `link` hint, and `noscript`, which the host parses with scripting
+ * off and the frame with scripting on, so its content is read twice. Plus a
+ * declarative shadow root, which the host's parsers keep as a `template` and the
+ * frame's attaches, so markup inside it is out of the host's reach. */
+const STATIC_PAGE_DROPPED = 'meta, link, noscript, template[shadowrootmode], template[shadowroot]'
+/** Rounds of parse, drop and re-serialize before the page is given up. */
+const STATIC_PAGE_SETTLE_ROUNDS = 3
+
+/** The finished document, parsed exactly as the frame will parse it, with every
+ * {@link STATIC_PAGE_DROPPED} element in the body removed until a parse finds
+ * none. Checked on the final string rather than on the fragment, because markup
+ * can re-parse into a different tree than the one first built. A page that has
+ * not settled after {@link STATIC_PAGE_SETTLE_ROUNDS} keeps only the host's own
+ * scripts: the check fails closed. */
+function settleStaticPage(serialized: string, nonce: string): string {
+  let out = serialized
+  for (let round = 0; round < STATIC_PAGE_SETTLE_ROUNDS; round++) {
+    const parsed = new DOMParser().parseFromString(out, 'text/html')
+    const found = Array.from(parsed.body.querySelectorAll(STATIC_PAGE_DROPPED))
+    if (found.length === 0) return out
+    for (const el of found) el.remove()
+    out = `<!DOCTYPE html>\n${parsed.documentElement.outerHTML}`
+  }
+  const parsed = new DOMParser().parseFromString(out, 'text/html')
+  if (parsed.body.querySelectorAll(STATIC_PAGE_DROPPED).length === 0) return out
+  for (const child of Array.from(parsed.body.childNodes)) {
+    const host = child.nodeName === 'SCRIPT' && (child as Element).getAttribute('nonce') === nonce
+    if (!host) child.remove()
+  }
+  return `<!DOCTYPE html>\n${parsed.documentElement.outerHTML}`
+}
+
 const EXTERNAL_LINK_TARGET_SHIM_BODY = `(function(){
   window.addEventListener('click', function(e){
     var path = typeof e.composedPath === 'function' ? e.composedPath() : null;
@@ -1068,6 +1118,13 @@ export function recloneScripts(root: ParentNode, doc: Document): void {
   }
 }
 
+/** 128 random bits as hex: a CSP nonce, so attribute-safe as written. */
+function mintScriptNonce(): string {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 interface BuildSrcdocOptions {
   html: string
   themeVars: Record<string, string>
@@ -1091,6 +1148,13 @@ interface BuildSrcdocOptions {
    * `connect-src 'none'` does not close. Off by default, so no widget surface
    * changes. */
   offlineScripts?: boolean
+  /** Let the page's own scripts run. On by default. Set false by a crewmate's
+   * report: the document CSP then admits only the host's scripts, each carrying a
+   * nonce minted for this document, so a page script, inline handler or
+   * `javascript:` URL never runs while the height reporter and comment bridge do.
+   * The page's links are inert and its refresh `meta`, `link` and `noscript` are
+   * dropped (see settleStaticPage), so nothing moves the frame without a script. */
+  pageScripts?: boolean
   /** Localized label for that indicator. Required when `showLoadingOverlay` is
    * set — the iframe cannot reach the parent's i18n catalog, so an untranslated
    * default here would visibly flip to English mid-load in every non-English
@@ -1122,6 +1186,7 @@ export function buildSrcdoc({
   loadingLabel = '',
   rewriteBareLinks = true,
   offlineScripts = false,
+  pageScripts = true,
   relayTouches = false,
 }: BuildSrcdocOptions): string {
   // A widget hardcoded for a light canvas renders on a light canvas even when
@@ -1162,10 +1227,18 @@ export function buildSrcdoc({
   // path returns above), so location.origin is always defined.
   const scriptOrigin = window.location.origin
 
+  // Minted per document and never derived from the page, so a page cannot carry it.
+  const nonce = pageScripts ? '' : mintScriptNonce()
+  const hostScript = (): HTMLScriptElement => {
+    const script = doc.createElement('script')
+    if (nonce) script.setAttribute('nonce', nonce)
+    return script
+  }
+
   // <meta CSP>
   const csp = doc.createElement('meta')
   csp.setAttribute('http-equiv', 'Content-Security-Policy')
-  csp.setAttribute('content', cspFor(scriptOrigin, offlineScripts))
+  csp.setAttribute('content', cspFor(scriptOrigin, offlineScripts, nonce))
   head.appendChild(csp)
 
   // Tailwind v4 dark-mode directives (compiled by the runtime on load). Placed
@@ -1238,7 +1311,7 @@ export function buildSrcdoc({
   // on-load attempt sees the wrapper too; without user activation its fallback
   // still fails rather than gaining an ambient clipboard-write path.
   // textContent assignment only — no LLM/user content interpolated.
-  const clipboardShim = doc.createElement('script')
+  const clipboardShim = hostScript()
   clipboardShim.textContent = CLIPBOARD_FALLBACK_SHIM_BODY
   body.appendChild(clipboardShim)
 
@@ -1248,15 +1321,23 @@ export function buildSrcdoc({
   // Skipped for hosts whose sandbox withholds popups, where the rewrite would
   // be a dead click. textContent assignment only.
   if (rewriteBareLinks) {
-    const linkTargetShim = doc.createElement('script')
+    const linkTargetShim = hostScript()
     linkTargetShim.textContent = EXTERNAL_LINK_TARGET_SHIM_BODY
     body.appendChild(linkTargetShim)
+  }
+
+  // A static page's links are inert (see STATIC_LINK_GUARD_BODY), registered
+  // ahead of the page. textContent assignment only.
+  if (nonce) {
+    const linkGuard = hostScript()
+    linkGuard.textContent = STATIC_LINK_GUARD_BODY
+    body.appendChild(linkGuard)
   }
 
   // Touch relay (see FRAME_TOUCH_RELAY_BODY), ahead of the LLM html so its
   // capture-phase listeners are registered first. textContent assignment only.
   if (relayTouches) {
-    const touchRelay = doc.createElement('script')
+    const touchRelay = hostScript()
     touchRelay.textContent = FRAME_TOUCH_RELAY_BODY
     body.appendChild(touchRelay)
   }
@@ -1288,7 +1369,7 @@ export function buildSrcdoc({
     overlay.appendChild(doc.createTextNode(loadingLabel))
     body.insertBefore(overlay, body.firstChild)
 
-    const revealScript = doc.createElement('script')
+    const revealScript = hostScript()
     revealScript.textContent = `(function(){
       var el=document.getElementById('mc-tw-loading');
       if(!el)return;
@@ -1317,14 +1398,14 @@ export function buildSrcdoc({
 
   // Height reporter (optional). textContent assignment, not template-literal.
   if (includeHeightReporter) {
-    const reporter = doc.createElement('script')
+    const reporter = hostScript()
     reporter.textContent = HEIGHT_REPORTER_BODY
     body.appendChild(reporter)
   }
 
   // Unsafe-centering guard: keeps the top of flex/grid-centered artifact
   // bodies reachable when the content overflows the iframe viewport.
-  const safeCenter = doc.createElement('script')
+  const safeCenter = hostScript()
   safeCenter.textContent = SAFE_CENTER_GUARD_BODY
   body.appendChild(safeCenter)
 
@@ -1334,7 +1415,7 @@ export function buildSrcdoc({
     const hlStyle = doc.createElement('style')
     hlStyle.textContent = COMMENT_HIGHLIGHT_CSS
     head.appendChild(hlStyle)
-    const bridge = doc.createElement('script')
+    const bridge = hostScript()
     bridge.textContent = COMMENT_BRIDGE_BODY
     body.appendChild(bridge)
   }
@@ -1368,10 +1449,16 @@ export function buildSrcdoc({
   //     body script executes, so only the element's own handler is free of
   //     that ordering hazard. Static trusted string — no LLM content.
   const serialized = `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`
-  return serialized.replace(
+  const finished = serialized.replace(
     /<meta name="x-script-placeholder" data-src="([^"]*)">/,
-    (_match, src) => `<script src="${src}" crossorigin="anonymous" onerror="${TW_ERROR_INLINE_HANDLER}"></script>`,
+    // With a nonce the inline `onerror` would be refused, so the tag drops it; the
+    // overlay's hang backstop still uncovers the page.
+    (_match, src) => nonce
+      ? `<script src="${src}" crossorigin="anonymous" nonce="${nonce}"></script>`
+      : `<script src="${src}" crossorigin="anonymous" onerror="${TW_ERROR_INLINE_HANDLER}"></script>`,
   )
+  // A static page also loses what navigates the frame without a script.
+  return nonce ? settleStaticPage(finished, nonce) : finished
 }
 
 /** SSR fallback for environments without a DOM. Used only by unit tests

@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import base64
+import random
 import re
 from typing import Any
 
@@ -137,6 +139,24 @@ def test_the_html_the_crewmate_writes_is_scrubbed(_floor_monkeypatch) -> None:
     status, body = _call(state, REPORT, {"kind": "weekly", "title": "W", "html": page}, slot.key)
     assert status == 200, body
     assert TOKEN not in (artifacts_mod.get_default_store().get(body["slug"]).content or "")
+
+
+def test_a_report_page_takes_the_plain_scrub_exactly(_floor_monkeypatch) -> None:
+    """A page gets the same scrub as any other goal string; no payload is exempt.
+
+    A report page embeds no raster image by contract, so a base64 run it carries
+    anyway (here a seeded blob in a data URI) is redacted as the plain scrub would.
+    """
+    from kiro_crew import artifacts as artifacts_mod
+
+    blob = base64.b64encode(random.Random(7).randbytes(300)).decode()
+    page = PAGE + f'<img src="data:image/png;base64,{blob}"><p>{TOKEN}</p>'
+    plain = member_goals.scrub_text(page)
+    assert blob not in plain and TOKEN not in plain
+    state, slot, _pushed = _setup()
+    status, body = _call(state, REPORT, {"kind": "weekly", "title": "W", "html": page}, slot.key)
+    assert status == 200, body
+    assert artifacts_mod.get_default_store().get(body["slug"]).content == plain
 
 
 def test_only_save_report_marks_an_artifact_a_report_and_the_mark_lasts(
@@ -282,10 +302,17 @@ def test_the_report_look_is_written_as_principles() -> None:
         "page number",
         "print-color-adjust",
         "inline svg",
+        "embed no raster image",
+        "no <img>, no data:image",
         "no scripts",
         "without internal ids",
         "agree with the readings",
         "the user has asked for wins",
+        "each colour one meaning",
+        "pair it with a word",
+        "short explanation where it first appears",
+        "by one name",
+        "one time span",
     ):
         assert phrase in look, phrase
 

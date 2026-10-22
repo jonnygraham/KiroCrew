@@ -1563,14 +1563,26 @@ to this kind would store content no reader can parse.
   bracketed IPv6 literal is not a valid CSP host-source — cannot reach the header.
   See `dashboard/handlers/sandbox_doc.py`. A crewmate's weekly report or monthly
   review carries `goal_report: true` on its record, set only by
-  `dashboard/goal_reminder.save_report` and kept across every later write; such
+  `dashboard/goal_reminder.save_report` and kept across every later write,
+  including a content edit through the artifact API, so an edited report stays
+  in the tighter frame; such
   an artifact opens, on its detail page, its side panel and its gallery
   thumbnail, in the same sandbox as the crewmate Dashboard page: grants
   `allow-scripts` only and a document CSP without the CDN script origins
   (`buildSrcdoc`'s `offlineScripts`), with in-frame links left as they are
-  (`website/src/lib/artifactFrame.ts`). Every other artifact keeps the frame
-  above. The host's injected height reporter and comment bridge are inline, so
-  they run in both. No `dangerouslySetInnerHTML` without
+  (`website/src/lib/artifactFrame.ts`, the grant from
+  `website/src/lib/crewDashboardSandbox.ts`, the one definition both frames use). Every other artifact keeps the frame
+  above. A report's own scripts never run: its CSP drops `'unsafe-inline'` for a
+  nonce minted per document (`buildSrcdoc`'s `pageScripts: false`), which only the
+  host's injected scripts carry, so the height reporter and comment bridge run and
+  a page script, inline handler or `javascript:` URL is refused whatever the
+  crewmate's egress rules allow. Nothing else moves the frame either: host
+  listeners cancel every click and auxclick, so no link navigates, and the
+  finished document is re-parsed as the frame will parse it, dropping each `meta`,
+  `link`, `noscript` and declarative shadow root (`template[shadowrootmode]`) in
+  its body until a parse finds none (three rounds, then only the host's scripts
+  are kept). `WidgetThumb` takes `goalReport` as a required prop, so every
+  thumbnail, the Drive library's included, names the frame it opens in. No `dangerouslySetInnerHTML` without
   DOMPurify; no inline event handlers.
 - **The detail frame is sized to its document, and promoted to its own
   compositing layer.** Both are corrections to shapes that only misbehave on iOS
