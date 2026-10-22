@@ -7,12 +7,13 @@ import { useTheme } from '../../hooks/useTheme'
 import { framablePreviewUrl } from '../../lib/safeUrl'
 import { useCloudDeploymentEnabled } from '../../hooks/useCloudDeploymentEnabled'
 import { useAppPreview } from '../WebAppArtifactCard'
-import { buildSrcdoc, readThemeVars } from '../../lib/widgetSrcdoc'
+import { AGENT_PAGE_SANDBOX, buildSrcdoc, readThemeVars } from '../../lib/widgetSrcdoc'
 import MarkdownRenderer from '../MarkdownRenderer'
 import { i18nT } from '../../i18n/t'
 import { stripMd } from '../notifications/notifMeta'
 import { useSandboxDoc } from '../../hooks/useSandboxDoc'
 import { useFrameSrc } from '../../hooks/useFrameSrc'
+import { useFrameLinkBridge } from '../../hooks/useFrameLinkBridge'
 import { useSilentLoadWatch } from '../../hooks/useSilentLoadWatch'
 import { useNearViewport } from '../../hooks/useNearViewport'
 import type { Artifact } from '../../types'
@@ -43,7 +44,7 @@ export function WidgetThumb({ content, slug }: { content: string; slug: string }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const themeVars = useMemo(() => readThemeVars(), [theme, colorTheme, themeVersion])
   const srcdoc = useMemo(
-    () => (content ? buildSrcdoc({ html: content, themeVars, mode: theme, includeHeightReporter: true }) : null),
+    () => (content ? buildSrcdoc({ html: content, themeVars, mode: theme, includeHeightReporter: true, linkBridge: true }) : null),
     [content, themeVars, theme],
   )
   // Reserve the height this content had last time, or the median of thumbnails
@@ -88,6 +89,9 @@ export function WidgetThumb({ content, slug }: { content: string; slug: string }
   const { url: blobUrl, failed } = useSandboxDoc(near ? srcdoc : null)
   // Later documents replace the first in place (hooks/useFrameSrc.ts).
   const frameSrc = useFrameSrc(iframeRef, blobUrl)
+  // A link in the thumbnail opens through the host, after a click in this frame
+  // and a confirm that shows the URL (the frame itself grants no popups).
+  const linkConfirm = useFrameLinkBridge([iframeRef])
   // Gated on the FIRST document only, and deliberately NOT reset when a new url
   // lands. A re-mint navigates the frame again, and re-hiding on every new url
   // leaves the thumb blank until the next `load` fires — long enough to read as
@@ -166,7 +170,7 @@ export function WidgetThumb({ content, slug }: { content: string; slug: string }
         <iframe
           ref={iframeRef}
           src={frameSrc}
-          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+          sandbox={AGENT_PAGE_SANDBOX}
           title={i18nT('pages.artifactsPage.preview', { slug })}
           tabIndex={-1}
           className="border-none bg-card block"
@@ -205,6 +209,7 @@ export function WidgetThumb({ content, slug }: { content: string; slug: string }
       ) : (
         <div className="h-full bg-bg-elevated animate-pulse" />
       )}
+      {linkConfirm}
     </div>
   )
 }

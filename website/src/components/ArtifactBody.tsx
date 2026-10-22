@@ -6,10 +6,11 @@ import { useFrameSrc } from '../hooks/useFrameSrc'
 import { useSilentLoadWatch } from '../hooks/useSilentLoadWatch'
 import { useScrollMemory } from '../hooks/useScrollMemory'
 import { useCommentBridge, type IframeSelection } from '../hooks/useCommentBridge'
+import { useFrameLinkBridge } from '../hooks/useFrameLinkBridge'
 import { InlineCommentOverlay } from './InlineCommentOverlay'
 import { Btn } from './ui'
 import ErrorNotice from './ErrorNotice'
-import { buildSrcdoc, readThemeVars } from '../lib/widgetSrcdoc'
+import { AGENT_PAGE_SANDBOX, buildSrcdoc, readThemeVars } from '../lib/widgetSrcdoc'
 import {
   widgetHeightKey, getWidgetHeight, setWidgetHeight, estimateWidgetHeight,
   clampFrameHeight,
@@ -291,7 +292,7 @@ export const ArtifactBodyIframe = memo(function ArtifactBodyIframe({
     () => artifact.content
       ? buildSrcdoc({
         html: artifact.content, themeVars, mode: theme, enableComments: true,
-        includeHeightReporter: true,
+        includeHeightReporter: true, linkBridge: true,
       })
       : null,
     [artifact.content, themeVars, theme],
@@ -348,6 +349,9 @@ export const ArtifactBodyIframe = memo(function ArtifactBodyIframe({
   useEffect(() => {
     if (scrollToCommentId?.id) scrollToAnchor(scrollToCommentId.id)
   }, [scrollToCommentId, scrollToAnchor])
+  // Links in the page open through the host, after a click in this frame and a
+  // confirm that shows the URL (the frame itself grants no popups).
+  const linkConfirm = useFrameLinkBridge([iframeRef])
   return (
     // The side panel's heightStyle still wins outright — that surface fits a
     // fixed pane and scrolls inside it. On the full page the wrapper takes no
@@ -466,7 +470,7 @@ export const ArtifactBodyIframe = memo(function ArtifactBodyIframe({
               onFrameLoaded()
               onIframeLoad?.()
             }}
-            sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+            sandbox={AGENT_PAGE_SANDBOX}
             // NO clipboard-write delegation here, deliberately. These frames host
             // agent-generated HTML whose scripts run on load, so a delegated
             // permission would let one overwrite the user's clipboard with no Copy
@@ -503,6 +507,7 @@ export const ArtifactBodyIframe = memo(function ArtifactBodyIframe({
           <div className="p-6 text-muted">{i18nT('components.artifactBody.rendering')}</div>
         )
       )}
+      {linkConfirm}
     </div>
   )
 })
