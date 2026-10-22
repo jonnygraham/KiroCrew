@@ -32,13 +32,14 @@ import json
 import os
 import socket
 import subprocess
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable, Iterator, NoReturn
 
 import pytest
+
+from kiro_crew.testing.wait import wait_until
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("KIROCREW_E2E"),
@@ -88,34 +89,49 @@ def _put_fact(client, key: str, value: str) -> None:
     client._open(request, timeout=30)
 
 
+#: How often a gateway is re-read over HTTP while a state is awaited.
+_HTTP_POLL_SECS = 0.5
+
+
 def _await_ready(client, path: str, secs: float = 30) -> None:
     """HTTP readiness precedes recovery; wait on a read before seeding data."""
-    deadline = time.monotonic() + secs
-    while True:
+
+    def _served() -> bool:
         try:
             client.get(path)
-            return
         except AssertionError as exc:
             cause = exc.__cause__
             if not isinstance(cause, urllib.error.HTTPError) or cause.code != 503:
                 raise
-            if time.monotonic() >= deadline:
-                raise
-        time.sleep(0.5)
+            return False
+        return True
+
+    wait_until(
+        _served,
+        timeout=secs,
+        interval=_HTTP_POLL_SECS,
+        describe=lambda: f"{path} still answers 503; {client.diagnostics()}",
+    )
 
 
 def _await_status(client, ready: Callable[[dict], bool], what: str, secs: float = 30) -> dict:
-    deadline = time.monotonic() + secs
     last: dict = {}
-    while time.monotonic() < deadline:
+
+    def _reached() -> bool:
+        nonlocal last
         last = client.get("/api/memory/embedding-status")
-        if ready(last):
-            return last
-        time.sleep(0.5)
-    pytest.fail(
-        f"embedding-status never reached {what}: {json.dumps(last, sort_keys=True)[:800]}\n"
-        f"{client.diagnostics()}"
+        return ready(last)
+
+    wait_until(
+        _reached,
+        timeout=secs,
+        interval=_HTTP_POLL_SECS,
+        describe=lambda: (
+            f"embedding-status never reached {what}: {json.dumps(last, sort_keys=True)[:800]}\n"
+            f"{client.diagnostics()}"
+        ),
     )
+    return last
 
 
 @pytest.fixture()
