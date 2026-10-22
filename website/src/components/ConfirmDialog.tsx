@@ -35,6 +35,9 @@ export interface ConfirmOptions {
   /** `top` paints the prompt above a full-screen overlay (`z-[9999]`) the
    *  caller may be raising it from; see `Modal`'s `layer`. */
   layer?: 'dialog' | 'top'
+  /** `false` leaves focus on the page body when the prompt closes; see
+   *  `Modal`'s `restoreFocus`. */
+  restoreFocus?: boolean
 }
 
 interface PendingConfirm {
@@ -59,6 +62,9 @@ export function useConfirm(): {
   confirm: (opts: ConfirmOptions) => Promise<boolean>
   confirmDialog: ReactNode
   confirmOpen: boolean
+  /** Answer the open prompt "no", for a caller that owns a dismissal path of
+   *  its own (e.g. consuming an Escape before a panel underneath sees it). */
+  cancelConfirm: () => void
 } {
   const [pending, setPending] = useState<PendingConfirm | null>(null)
   const pendingRef = useRef<PendingConfirm | null>(null)
@@ -84,6 +90,7 @@ export function useConfirm(): {
     pendingRef.current = null
     setPending(null)
   }, [])
+  const cancelConfirm = useCallback(() => settle(false), [settle])
 
   // An unmount while the dialog is open answers "no" so the awaiting caller
   // is released instead of suspended forever.
@@ -100,6 +107,7 @@ export function useConfirm(): {
       title={opts.title}
       maxWidth={440}
       layer={opts.layer}
+      restoreFocus={opts.restoreFocus}
       footer={
         <>
           <Btn onClick={() => settle(false)}>
@@ -122,5 +130,5 @@ export function useConfirm(): {
     </Modal>
   ) : null
 
-  return { confirm, confirmDialog, confirmOpen: !!pending }
+  return { confirm, confirmDialog, confirmOpen: !!pending, cancelConfirm }
 }

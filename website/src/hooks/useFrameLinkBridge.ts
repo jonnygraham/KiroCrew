@@ -1,12 +1,8 @@
-import { createElement, useEffect, useRef, type ReactNode, type RefObject } from 'react'
+import { createElement, useCallback, useEffect, useRef, type ReactNode, type RefObject } from 'react'
 
 import { useConfirm } from '../components/ConfirmDialog'
 import { i18nT } from '../i18n/t'
-import { hasGesture, OPEN_MESSAGE_TYPE, openExternal } from './useFrameOpenLink'
-
-/** Longest URL a page may ask its host to open. A real link is far shorter; the
- *  cap keeps the confirm readable and the message cheap to check. */
-export const MAX_WEB_LINK_LENGTH = 2048
+import { hasGesture, OPEN_MESSAGE_TYPE, openExternal, useFrameOpenLink } from './useFrameOpenLink'
 
 /**
  * The web URL an open message asks for, or null when it is not one the link
@@ -22,7 +18,7 @@ export function webUrlOf(data: unknown): string | null {
   if (!data || typeof data !== 'object') return null
   const msg = data as { type?: unknown; url?: unknown }
   if (msg.type !== OPEN_MESSAGE_TYPE || typeof msg.url !== 'string') return null
-  if (!msg.url || msg.url.length > MAX_WEB_LINK_LENGTH) return null
+  if (!msg.url) return null
   let parsed: URL
   try {
     parsed = new URL(msg.url)
@@ -36,7 +32,7 @@ export function webUrlOf(data: unknown): string | null {
 
 /**
  * The host half of the link bridge for frames that hold agent-written pages
- * (saved artifacts, their thumbnails, a teammate's shared artifact, chat widgets).
+ * (saved artifacts, a teammate's shared artifact, chat widgets).
  *
  * Those frames are `sandbox="allow-scripts"` with no popup grant, so a page cannot
  * open a window itself. `buildSrcdoc({ linkBridge: true })` turns a `_blank` or
@@ -58,38 +54,49 @@ export function useFrameLinkBridge(
   open: (url: string) => void = openExternal,
   gesture: (frame: HTMLIFrameElement) => boolean = hasGesture,
 ): ReactNode {
-  const { confirm, confirmDialog } = useConfirm()
-  const framesRef = useRef(frames)
-  framesRef.current = frames
+  const { confirm, confirmDialog, confirmOpen, cancelConfirm } = useConfirm()
   const openRef = useRef(open)
   openRef.current = open
-  const gestureRef = useRef(gesture)
-  gestureRef.current = gesture
-  const confirmRef = useRef(confirm)
-  confirmRef.current = confirm
+  // The frame, URL and gesture checks are useFrameOpenLink's own listener; this
+  // hook adds the web-URL rule and puts the confirm in front of the open.
+  const ask = useCallback((url: string) => {
+    void confirm({
+      title: i18nT('hooks.frameLinkBridge.title'),
+      body: createElement(
+        'code',
+        { className: 'block break-all font-mono text-xs text-[var(--text)]', translate: 'no' },
+        url,
+      ),
+      confirmLabel: i18nT('hooks.frameLinkBridge.open'),
+      danger: false,
+      primary: true,
+      // The artifact frame also renders inside ArtifactPanel's full-screen shell
+      // (an opaque portal at z-[9999]); the prompt must paint above it.
+      layer: 'top',
+      // Focus must not go back to the frame: the click on Cancel is itself a
+      // live activation, and with the frame focused again a page posting on a
+      // loop would pass the gesture test and reopen the prompt at once. On the
+      // body, the next prompt needs a new click in the frame.
+      restoreFocus: false,
+    }).then((ok) => {
+      if (ok) openRef.current(url)
+    })
+  }, [confirm])
+  useFrameOpenLink(frames, ask, gesture, webUrlOf)
+  // Escape on this prompt is consumed here, at window capture, before any
+  // document listener underneath sees it: ArtifactPanel's full-screen shell
+  // exits full screen on Escape, which would unmount the frame and drop what
+  // the person typed into the page just to cancel a link.
   useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      if (!event.source) return
-      const mine = framesRef.current.find((f) => f.current?.contentWindow === event.source)?.current
-      if (!mine) return
-      const url = webUrlOf(event.data)
-      if (!url || !gestureRef.current(mine)) return
-      void confirmRef.current({
-        title: i18nT('hooks.frameLinkBridge.title'),
-        body: createElement(
-          'code',
-          { className: 'block break-all font-mono text-xs text-[var(--text)]', translate: 'no' },
-          url,
-        ),
-        confirmLabel: i18nT('hooks.frameLinkBridge.open'),
-        danger: false,
-        primary: true,
-      }).then((ok) => {
-        if (ok) openRef.current(url)
-      })
+    if (!confirmOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return
+      e.stopPropagation()
+      e.preventDefault()
+      cancelConfirm()
     }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [])
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [confirmOpen, cancelConfirm])
   return confirmDialog
 }

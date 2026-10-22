@@ -10078,8 +10078,8 @@
   },
   "hooks": {
     "frameLinkBridge": {
-      "open": "लिंक खोलें",
-      "title": "यह लिंक खोलें?"
+      "open": "लिंक खोलो",
+      "title": "यह लिंक खोलना है?"
     },
     "mic": {
       "could_not_start_the_microphone": "माइक्रोफ़ोन शुरू नहीं हो सका।",

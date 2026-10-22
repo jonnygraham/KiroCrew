@@ -1,6 +1,7 @@
 /** Every frame that holds an agent-written page -- a saved artifact, its library
  * thumbnail, a teammate's shared artifact, a chat widget -- is rendered here for
- * real and checked for the same three things:
+ * real. The thumbnail is checked for its sandbox only (no click reaches it); the
+ * others for the same three things:
  *
  *   1. its sandbox is exactly `allow-scripts`: no `allow-popups`, no
  *      `allow-popups-to-escape-sandbox`;
@@ -57,7 +58,6 @@ afterEach(() => {
 
 const surfaces: Array<[string, () => ReactElement, string?]> = [
   ['saved artifact', () => <ArtifactBodyIframe artifact={{ slug: 's', name: 'S', kind: 'html', content: BODY } as unknown as Artifact} />],
-  ['library thumbnail', () => <WidgetThumb content={BODY} slug="s" />],
   ['chat widget', () => <WidgetFrame html={BODY} title="W" />],
   ['shared artifact', () => (
     <Routes>
@@ -80,6 +80,21 @@ function mintedDocument(): string {
   return String(calls[calls.length - 1][0])
 }
 
+describe('the library thumbnail frame', () => {
+  // Every render site wraps it in `pointer-events-none` and the frame is
+  // `tabIndex={-1}`: no click reaches it, so it carries no link bridge.
+  it('grants scripts only, and mints its page without a link shim', async () => {
+    renderWithProviders(<WidgetThumb content={BODY} slug="s" />)
+    const frame = await frameOf()
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(frame.getAttribute('tabindex')).toBe('-1')
+    const doc = mintedDocument()
+    expect(doc).not.toContain(OPEN)
+    expect(doc).not.toContain("setAttribute('target', '_blank')")
+    expect(doc).toContain('https://cdn.jsdelivr.net https://cdnjs.cloudflare.com')
+  })
+})
+
 describe.each(surfaces)('the %s frame', (_label, ui, route) => {
   it('grants scripts only, no popups', async () => {
     renderWithProviders(ui(), route ? { route } : undefined)
@@ -92,7 +107,7 @@ describe.each(surfaces)('the %s frame', (_label, ui, route) => {
     await frameOf()
     const doc = new DOMParser().parseFromString(mintedDocument(), 'text/html')
     const scripts = Array.from(doc.querySelectorAll('script')).map((s) => s.textContent ?? '')
-    expect(scripts.some((t) => t.includes(OPEN) && t.includes("Object.defineProperty(window, 'open'"))).toBe(true)
+    expect(scripts.some((t) => t.includes(OPEN) && t.includes('window.open = function'))).toBe(true)
     const csp = doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') ?? ''
     expect(csp).toContain('https://cdn.jsdelivr.net https://cdnjs.cloudflare.com')
   })

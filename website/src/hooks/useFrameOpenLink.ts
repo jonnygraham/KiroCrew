@@ -51,12 +51,15 @@ export function openExternal(url: string): void {
 
 /**
  * Honour open messages from the given frames. `open` and `gesture` are injectable
- * for tests only.
+ * for tests only. `accept` is the URL rule: the crew pages' pull-request-only
+ * `openUrlOf` by default, and `webUrlOf` for the agent-page link bridge
+ * (`useFrameLinkBridge`), which also passes a confirm as `open`.
  */
 export function useFrameOpenLink(
   frames: ReadonlyArray<RefObject<HTMLIFrameElement | null>>,
   open: (url: string) => void = openExternal,
   gesture: (frame: HTMLIFrameElement) => boolean = hasGesture,
+  accept: (data: unknown) => string | null = openUrlOf,
 ): void {
   const framesRef = useRef(frames)
   framesRef.current = frames
@@ -64,12 +67,14 @@ export function useFrameOpenLink(
   openRef.current = open
   const gestureRef = useRef(gesture)
   gestureRef.current = gesture
+  const acceptRef = useRef(accept)
+  acceptRef.current = accept
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (!event.source) return
       const mine = framesRef.current.find((f) => f.current?.contentWindow === event.source)?.current
       if (!mine) return
-      const url = openUrlOf(event.data)
+      const url = acceptRef.current(event.data)
       if (url && gestureRef.current(mine)) openRef.current(url)
     }
     window.addEventListener('message', onMessage)

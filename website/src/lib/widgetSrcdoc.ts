@@ -56,6 +56,7 @@ import { sanitizeCssValue } from './cssSanitize'
  * the `/sandbox-doc/` response header in `dashboard/handlers/sandbox_doc.py`. */
 export const AGENT_PAGE_SANDBOX = 'allow-scripts'
 
+
 /** CSS custom properties the parent app exposes to widgets. Resolved against
  * document.documentElement and serialized into the sandboxed srcdoc so widget
  * HTML can use `style="background: var(--bg)"` or Tailwind arbitrary values
@@ -636,6 +637,8 @@ const EXTERNAL_LINK_TARGET_SHIM_BODY = `(function(){
  * post. The host (`useFrameLinkBridge`) opens it only for a web URL, only right
  * after a click in this frame, and only once the person confirms the URL.
  *
+ *   - A middle-click on a web link is handled the same way (it asks for a new
+ *     tab whatever the target).
  *   - A click on a link that would open a window (`target="_blank"` or any other
  *     target but `_self`) or that would navigate this frame to another site (a
  *     bare absolute `http(s)` link) is cancelled here and, when its href is an
@@ -666,22 +669,34 @@ const LINK_BRIDGE_SHIM_BODY = `(function(){
     if (!url) return;
     try { parent.postMessage({ type: T, url: url }, '*'); } catch (_) {}
   }
-  window.addEventListener('click', function(e){
-    var path = typeof e.composedPath === 'function' ? e.composedPath() : null;
-    var t = (path && path.length) ? path[0] : e.target;
-    if (!t || typeof t.closest !== 'function') return;
-    var a = t.closest('a[href],area[href]');
-    if (!a || a.closest('[data-action]')) return;
+  function linkOf(e){
+    // The composed path crosses shadow roots, so a link that wraps a custom
+    // element's shadow content is still found; closest() alone stops at the root.
+    var path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
+    for (var i = 0; i < path.length; i++) {
+      var n = path[i];
+      if (n && n.nodeType === 1 && (n.localName === 'a' || n.localName === 'area') && n.hasAttribute('href')) return n;
+    }
+    return null;
+  }
+  function onLink(e, middle){
+    var a = linkOf(e);
+    if (!a || (typeof a.closest === 'function' && a.closest('[data-action]'))) return;
     var target = (a.getAttribute('target') || '').trim().toLowerCase();
     var url = web(a.getAttribute('href') || '');
-    if (target === '_self') return;
-    if (!target && !url) return;
+    if (!middle && target === '_self') return;
+    if (!middle && !target && !url) return;
+    if (middle && !url) return;
     e.preventDefault();
     if (url) ask(url);
-  }, true);
-  var open = function(u){ ask(u); return null; };
-  try { Object.defineProperty(window, 'open', { value: open, configurable: false, writable: false }); }
-  catch (_) { try { window.open = open; } catch (_e) {} }
+  }
+  window.addEventListener('click', function(e){ onLink(e, false); }, true);
+  // A middle-click asks for a new tab whatever the target, which the frame cannot open.
+  window.addEventListener('auxclick', function(e){ if (e.button === 1) onLink(e, true); }, true);
+  // A plain assignment, not a locked property: a page script that declares its
+  // own top-level open (function or const) must still run. The sandbox already
+  // refuses a native popup, and the host checks and confirms every request.
+  try { window.open = function(u){ ask(u); return null; }; } catch (_) {}
 })();`
 
 /** The host half of the link bridge for a widget popped out into its own tab
@@ -689,8 +704,7 @@ const LINK_BRIDGE_SHIM_BODY = `(function(){
  * writes, holding the widget in an `AGENT_PAGE_SANDBOX` frame, so React and
  * `useFrameLinkBridge` are not there to answer the frame's open message. This
  * script is: the same checks (the message comes from the frame, the URL is an
- * absolute `http(s)` URL with no user name or password and at most 2048
- * characters, the person just clicked in the frame), then the browser's own
+ * absolute `http(s)` URL with no user name or password, the person just clicked in the frame), then the browser's own
  * confirm showing the URL, then a `noopener,noreferrer` open. `__PROMPT__` is
  * replaced by `popoutLinkBridgeScript` with the localized question. */
 const POPOUT_LINK_BRIDGE_BODY = `(function(){
@@ -701,13 +715,16 @@ const POPOUT_LINK_BRIDGE_BODY = `(function(){
     if (!f || !e.source || e.source !== f.contentWindow) return;
     var d = e.data;
     if (!d || typeof d !== 'object' || d.type !== T || typeof d.url !== 'string') return;
-    if (!d.url || d.url.length > 2048) return;
+    if (!d.url) return;
     var u;
     try { u = new URL(d.url); } catch (_) { return; }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
     if (u.username || u.password) return;
     var ua = navigator.userActivation;
     if (!ua || !ua.isActive || document.activeElement !== f) return;
+    // Focus leaves the frame before asking and stays off after: the native box
+    // keeps the activation alive, so a frame posting again would pass at once.
+    try { f.blur(); } catch (_) {}
     if (window.confirm(PROMPT + '\\n\\n' + u.href)) window.open(u.href, '_blank', 'noopener,noreferrer');
   });
 })();`

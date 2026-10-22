@@ -12,7 +12,8 @@ const LINK = 'https://code.example.test/reviews/CR-1'
 
 function setup({ active = true, focused = true, answer = true } = {}) {
   const frameWindow = {}
-  const frame = { contentWindow: frameWindow }
+  let isFocused = focused
+  const frame = { contentWindow: frameWindow, blur: () => { isFocused = false } }
   let onMessage: ((e: { source: unknown; data: unknown }) => void) | null = null
   const confirm = vi.fn(() => answer)
   const open = vi.fn()
@@ -25,7 +26,7 @@ function setup({ active = true, focused = true, answer = true } = {}) {
   }
   const doc = {
     querySelector: (sel: string) => (sel === 'iframe' ? frame : null),
-    get activeElement() { return focused ? frame : {} },
+    get activeElement() { return isFocused ? frame : {} },
   }
   const nav = { userActivation: { isActive: active } }
   new Function('window', 'document', 'navigator', popoutLinkBridgeScript('Open this link?'))(win, doc, nav)
@@ -39,6 +40,15 @@ describe('popped-out widget link bridge', () => {
     send({ type: OPEN, url: LINK })
     expect(confirm).toHaveBeenCalledWith(`Open this link?\n\n${LINK}`)
     expect(open).toHaveBeenCalledWith(LINK, '_blank', 'noopener,noreferrer')
+  })
+
+  it('asks once per click, however many requests the page queues', () => {
+    const { send, confirm, open } = setup({ answer: false })
+    send({ type: OPEN, url: LINK })
+    send({ type: OPEN, url: LINK })
+    send({ type: OPEN, url: 'https://example.test/other' })
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(open).not.toHaveBeenCalled()
   })
 
   it('opens nothing on no', () => {

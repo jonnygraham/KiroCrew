@@ -10223,7 +10223,7 @@
   "hooks": {
     "frameLinkBridge": {
       "open": "Ouvrir le lien",
-      "title": "Ouvrir ce lien ?"
+      "title": "Ouvrir ce lien ?"
     },
     "mic": {
       "could_not_start_the_microphone": "Impossible de démarrer le microphone.",

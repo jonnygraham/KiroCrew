@@ -64,6 +64,11 @@ interface ModalProps {
    *  a guide never points at, resolves or reports a control inside it
    *  (`guide/findTargetPolicy.ts`). */
   guideTrustRoot?: boolean
+  /** Return focus to what held it before the dialog opened (default). `false`
+   *  leaves it on the page body instead, for a prompt raised by a frame's own
+   *  request: handing focus back to that frame would re-arm the frame-focus
+   *  test it was asked through (`useFrameLinkBridge`). */
+  restoreFocus?: boolean
   /** Modal content */
   children: React.ReactNode
 }
@@ -81,7 +86,7 @@ const SPRING = { type: 'spring' as const, stiffness: 500, damping: 35 }
  * therefore capture the restore target at page load and move focus into a
  * dialog that is not on screen.
  */
-function ModalDialog({ onClose, title, ariaLabel, footer, headerActions, maxWidth, height, layoutId, dismissDisabled = false, interactionDisabled = false, guideTrustRoot: trustRootProp = false, children }: ModalDialogProps) {
+function ModalDialog({ onClose, title, ariaLabel, footer, headerActions, maxWidth, height, layoutId, dismissDisabled = false, interactionDisabled = false, guideTrustRoot: trustRootProp = false, restoreFocus = true, children }: ModalDialogProps) {
   // Asked for, or opened from inside a trust-root region (it portals out of it).
   const trustRoot = useGuideTrustRoot() || trustRootProp
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -97,7 +102,7 @@ function ModalDialog({ onClose, title, ariaLabel, footer, headerActions, maxWidt
   // consume it with preventDefault before the outer dialog decides to close.
   // The trap is one facet of interaction: an inert panel (a nested portaled
   // dialog is the active layer) must not pull Tab back into itself either.
-  useDialogFocusTrap(dialogRef, dismiss, { handleEscape: false, enabled: !interactionDisabled })
+  useDialogFocusTrap(dialogRef, dismiss, { handleEscape: false, enabled: !interactionDisabled, restoreFocus })
   useEffect(() => {
     if (dialogRef.current) dialogRef.current.inert = interactionDisabled
   }, [interactionDisabled])
