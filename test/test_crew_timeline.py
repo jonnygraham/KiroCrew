@@ -411,3 +411,30 @@ async def test_the_timeline_is_owner_only(monkeypatch):
     monkeypatch.setattr(crew_workers, "require_owner_dashboard_request", _deny)
     resp = await crew_workers.api_crew_timeline(_get(_state([], {}), "root"))
     assert resp.status == 403
+
+
+def test_a_hand_off_pairs_a_send_named_by_stem_or_unique_title():
+    """``session_send`` accepts a slot key, its transcript stem or an exact title, so
+    the pairing reads all three; an ambiguous title pairs nothing."""
+
+    def lanes_for(target: str, *, twin: bool = False) -> list[dict]:
+        conductor = {
+            "key": "root",
+            "title": "Root",
+            "sends": [{"ts": "2026-10-21T03:00:01+00:00", "to": target}],
+            "seeds": [],
+        }
+        worker = {
+            "key": "chat-7",
+            "title": "Welcome note",
+            "sends": [],
+            "seeds": [{"ts": "2026-10-21T03:00:02+00:00", "from": "root"}],
+        }
+        out = [conductor, worker]
+        if twin:
+            out.append({"key": "chat-8", "title": "Welcome note", "sends": [], "seeds": []})
+        return out
+
+    for target in ("chat-7", "dashboard_chat-7", "welcome NOTE"):
+        assert [h["to"] for h in crew_timeline.handoffs(lanes_for(target))] == ["chat-7"], target
+    assert crew_timeline.handoffs(lanes_for("Welcome note", twin=True)) == []
