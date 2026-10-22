@@ -1049,23 +1049,21 @@ def _materialize_md_notebook_mask_targets(established: list[str] | None = None) 
 def _migrate_md_notebook_legacy_state() -> list[str]:
     """Run the Notes builtin's one-time legacy-state move before this sandbox launches.
 
-    Spawn prep owns this call, not only the Notes backend's own spawn, because of WHEN the
-    move must first run. The old bare names under ``workspace/md-notebook`` are masked only
-    while a file sits there, and that directory is agent-writable. If the first pass waited
-    for the first Notes start, an agent in any other namespace could first drop a bare
-    ``settings.json`` with ``autoSync`` on, and that pass would move it into the state
-    directory. Running it here means the first pass, and its marker that closes promotion,
-    happen before any agent of this build gets a shell. After that it is one ``stat``.
+    Spawn prep runs it, not only the Notes backend's own spawn, so the first pass and its
+    marker that closes promotion happen as early as possible, before an agent of this build
+    gets a shell on a fresh upgrade. After that it is one ``stat``.
 
     The move itself lives in :mod:`kiro_crew.md_notebook_state`, which imports no app code
     or aiohttp. It runs against this module's ``config_dir()``, the same home the
     materialiser fills.
 
-    **Fail-closed.** The marker is what stops a bare file an agent writes later from being
-    promoted, so a launch with the pass unsealed would hand the next pass whatever an agent
-    drops at an absent bare name (an ``autoSync: true`` settings file, say). The spawn is
-    refused, naming the cause, until the marker exists. An absent data home is left
-    absent: there is nothing to move and no namespace has anything to promote.
+    **A failed move does not stop the spawn.** It is one optional app's state, so a copy or
+    read error, a full disk, an unwritable marker or an extra hard link on the PAT is
+    logged and the pass stays unsealed for the next spawn to retry. No agent can plant a
+    bare state name meanwhile: :func:`_materialize_md_notebook_mask_targets` runs right
+    after this and stubs every bare name, so its mask always mounts, and the Notes backend
+    does not start until the pass is sealed (``sealed_default_legacy_state`` in
+    ``apps/backend.py``). An absent data home is left absent: there is nothing to move.
     """
     # Local, not top-level: every module-level name here is an owner name the
     # ``kiro_crew.sandbox`` facade inventory forwards, and a module alias is not one.
@@ -1085,12 +1083,15 @@ def _migrate_md_notebook_legacy_state() -> list[str]:
         # refuses the same chain, so nothing on this host writes Notes state at all.
         return []
     try:
-        moved = mns.migrate_legacy_state(state_dir, Path(root).joinpath(*mns.LEGACY_DIR_PARTS))
+        return mns.migrate_legacy_state(state_dir, Path(root).joinpath(*mns.LEGACY_DIR_PARTS))
     except OSError as exc:
-        raise SandboxCeilingUnsealable(
-            f"the Notes builtin's one-time move of its old state into {state_dir} did not "
-            f"finish: {exc}. Until it does, a file an agent writes at an old state name "
-            "could be moved in as the user's own settings, so no sandbox is launched. Fix "
-            "the cause (disk space, permissions, or an extra hard link) and retry."
-        ) from exc
-    return moved
+        # Log and continue: the stubs planted next keep every bare name masked, and the
+        # Notes backend stays down until a later pass seals.
+        logger.warning(
+            "the Notes builtin's one-time move of its old state into %s did not finish: %s. "
+            "Notes stays off until it does; the next spawn retries it. Fix the cause (disk "
+            "space, permissions, or an extra hard link on the PAT).",
+            state_dir,
+            exc,
+        )
+        return []

@@ -70,10 +70,11 @@ mask covers the leaf and not its ancestors: under the agent-writable `workspace/
 it could be renamed out from under its own mask.
 
 **Legacy move.** `kiro_crew.md_notebook_state.migrate_legacy_state` moves real state from the
-old bare names into this directory, in one pass. Sandbox spawn prep runs it before any agent
-of the build gets a shell (an agent could otherwise drop a bare `settings.json` for the pass
-to promote), and the Notes backend spawn runs it for a host with no sandbox wrap. Both
-refuse to launch until the pass is sealed, so no backend write can race it, and passes hold
+old bare names into this directory, in one pass. Sandbox spawn prep runs it first, and the
+Notes backend spawn runs it for a host with no sandbox wrap. A failed pass in spawn prep is
+logged and the spawn goes on: the stubs planted right after keep every bare name masked, so
+no agent can plant state for a later pass to promote. The Notes backend does not start until
+the pass is sealed, so no backend write can race it, and passes hold
 a lock (`.migrating`) from the marker check to the marker write, so two spawns never run
 one at once. The pass reads each source once (regular file, no link followed) and writes
 those bytes with `atomic_write` only over an absent or stub destination. It syncs this
@@ -86,8 +87,8 @@ The pass ends by writing `.migrated`, which closes promotion for good. A copy th
 stops the pass unsealed, so the next spawn copies it again (so does a source it cannot
 read for a reason other than being absent), and a PAT with a second hard
 link stops it unsealed too, so the hard-link check keeps refusing on it. Every unsealed
-case is one where a data-home write is failing, a spawn would be refused anyway, or a
-concurrent pass is about to seal. The old bare names keep stubs where absent, so their masks always mount, and they
+case is one where a data-home write is failing, the hard-link check refuses the spawn anyway,
+or a concurrent pass is about to seal; until it seals, Notes stays off. The old bare names keep stubs where absent, so their masks always mount, and they
 are not carved back.
 
 **Rollback loses the PAT.** The move empties the legacy `pat` after copying it, so a build

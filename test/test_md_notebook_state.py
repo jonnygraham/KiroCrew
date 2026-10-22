@@ -210,6 +210,45 @@ class TestPromotionClosesAfterTheFirstPass:
         assert mns.migrate_legacy_state(state, legacy) == []
         assert (state / "vaults.json").read_text() == '[{"id": "saved-after-seal"}]'
 
+    def test_the_seal_is_rechecked_under_the_lock_for_stub_equal_state(self, dirs, monkeypatch):
+        """The user removed every vault after the other pass sealed, so the backend saved
+        the stub bytes. Only the marker re-check under the lock keeps legacy bytes out."""
+        state, legacy = dirs
+        _stub(state)
+        (legacy / "vaults.json").write_text('[{"id": "legacy"}]')
+        real = mns.acquire_lock
+
+        def _other_pass_seals_meanwhile(fd, **kwargs):
+            (state / mns.MIGRATION_MARKER).write_text("{}\n")
+            return real(fd, **kwargs)
+
+        monkeypatch.setattr(mns, "acquire_lock", _other_pass_seals_meanwhile)
+
+        assert mns.migrate_legacy_state(state, legacy) == []
+        assert (state / "vaults.json").read_bytes() == mns.ABSENT_EQUIVALENT["vaults.json"]
+
+    @_POSIX_ONLY
+    def test_a_hard_linked_legacy_pat_stops_the_pass_unsealed(self, dirs, tmp_path):
+        """A second name on the PAT would keep the token out of the hard-link check's
+        sight after a copy, so it is not moved; the registry still is."""
+        state, legacy = dirs
+        _stub(state)
+        (legacy / "pat").write_text("ghp_real")
+        os.link(legacy / "pat", tmp_path / "second-name")
+        (legacy / "vaults.json").write_text('[{"id": "v1"}]')
+
+        with pytest.raises(mns.SecondNameError):
+            mns.migrate_legacy_state(state, legacy)
+
+        assert (state / "pat").read_bytes() == mns.ABSENT_EQUIVALENT["pat"]
+        assert (legacy / "pat").read_text() == "ghp_real"
+        assert not (state / mns.MIGRATION_MARKER).exists()
+
+        (tmp_path / "second-name").unlink()
+        mns.migrate_legacy_state(state, legacy)
+        assert (state / "pat").read_text() == "ghp_real"
+        assert (state / mns.MIGRATION_MARKER).is_file()
+
     def test_the_legacy_pat_is_kept_when_the_copy_is_not_durable(self, dirs, monkeypatch):
         """The source goes only after the state directory is synced, so a power loss
         cannot lose both copies."""
@@ -336,3 +375,45 @@ class TestTheMoveRunsBeforeAnySandboxLaunches:
         # The moved name now holds the stub its mask mounts on.
         assert (legacy / "pat").read_bytes() == b""
         assert (home / mns.STATE_DIR_LEAF / mns.MIGRATION_MARKER).exists()
+
+    @_POSIX_ONLY
+    def test_a_failed_move_does_not_stop_the_spawn(self, tmp_path, monkeypatch, caplog):
+        """One optional app's state move must not refuse every chat, cron and subagent
+        spawn. The spawn goes on unsealed, every bare name still gets its stub (so its
+        mask mounts), and the Notes backend stays off until a later pass seals."""
+        home = tmp_path / ".kiro" / "crew"
+        legacy = home / "workspace" / "md-notebook"
+        legacy.mkdir(parents=True)
+        (legacy / "vaults.json").write_text('[{"id": "v1"}]')
+        monkeypatch.setattr(sb, "config_dir", lambda: home)
+        monkeypatch.setattr(sb.Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setenv("KIROCREW_HOME", str(home))
+        monkeypatch.setattr("kiro_crew.sandbox._ssh_supports_accept_new", lambda: True)
+        real = mns.atomic_write
+
+        def _disk_full(path, *a, **k):
+            if Path(path).name == "vaults.json":
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(mns, "atomic_write", _disk_full)
+
+        with caplog.at_level("WARNING"):
+            argv = sb.namespace_argv(["/bin/true"])
+
+        assert argv
+        assert "did not finish" in caplog.text
+        state = home / mns.STATE_DIR_LEAF
+        assert not (state / mns.MIGRATION_MARKER).exists()
+        for name in mns.STATE_FILE_NAMES:
+            assert (legacy / name).is_file(), name
+        assert (legacy / "vaults.json").read_text() == '[{"id": "v1"}]'
+        monkeypatch.setattr(mns, "default_state_dir", lambda: state)
+        monkeypatch.setattr(mns, "default_legacy_dir", lambda: legacy)
+        assert mns.sealed_default_legacy_state() is False
+
+        # The next spawn, with the disk freed, moves it and seals.
+        monkeypatch.setattr(mns, "atomic_write", real)
+        sb.namespace_argv(["/bin/true"])
+        assert (state / "vaults.json").read_text() == '[{"id": "v1"}]'
+        assert (state / mns.MIGRATION_MARKER).is_file()

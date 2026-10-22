@@ -564,8 +564,9 @@ def namespace_argv(
     # The mask loop has the same guard (``isdir``), so the on-demand hidden
     # directories get the same treatment for the same reason.
     _materialize_maskable_dirs(_required_targets)
-    # The Notes move runs BEFORE the stubs below: it removes a moved bare file, and the
-    # materialiser then plants the stub the launcher masks at that name.
+    # The Notes move runs BEFORE the stubs below: it reads real state at the bare names
+    # (and empties the legacy PAT in place), and the materialiser then plants the stub
+    # the launcher masks at any bare name left absent. A failed move is logged, not raised.
     _migrate_md_notebook_legacy_state()
     # And the ``sensitive_files`` loop is guarded on ``isfile``, so md-notebook's state
     # leaves — creatable on a sandboxed host now that the backend carve-out exists —

@@ -210,13 +210,12 @@ def migrate_legacy_state(state_dir: Path, legacy_dir: Path) -> list[str]:
 
     The pass ends by writing :data:`MIGRATION_MARKER`, whether or not anything moved, so a
     bare file an agent writes later is never a candidate. A copy that fails stops the pass
-    UNSEALED (``OSError``), so the next spawn copies it again; until then no sandbox
-    launches and the backend does not start.
+    UNSEALED (``OSError``), so the next spawn copies it again; until then the Notes
+    backend does not start (spawn prep logs the failure and goes on).
 
     Passes hold :func:`_pass_lock` from the marker check to the marker write. No Notes
-    backend writes before the seal: sandbox spawn prep and the backend spawn both refuse to
-    launch until it exists. A PAT with a second hard link (:class:`SecondNameError`) also
-    stops the pass unsealed. The marker write itself raises, so a pass that cannot seal
+    backend writes before the seal: the backend spawn refuses to launch until it exists.
+    A PAT with a second hard link (:class:`SecondNameError`) also stops the pass unsealed. The marker write itself raises, so a pass that cannot seal
     runs again on the next spawn. Returns the destinations it populated.
     """
     moved: list[str] = []
@@ -278,7 +277,7 @@ def migrate_legacy_state(state_dir: Path, legacy_dir: Path) -> list[str]:
                     except OSError:
                         logger.warning("could not empty the legacy Notes PAT", exc_info=True)
         if failed:
-            # Unsealed, so the next spawn copies them; until then no sandbox launches.
+            # Unsealed, so the next spawn copies them; until then Notes does not start.
             raise OSError(f"could not copy legacy Notes state {', '.join(failed)}")
         atomic_write(marker, "{}\n", restrict_to_owner=True, restrict_on_error="warn", fsync=True)
     return moved
